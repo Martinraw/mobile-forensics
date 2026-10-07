@@ -1,7 +1,7 @@
 """Tools tab: enumerate, check, and run bundled external forensic tools.
 
 The form is rebuilt each time the user selects a tool, driven by each
-ForensicTool subclass's ``ui`` dict. No command typing required — the widget
+ForensicTool subclass's ``ui`` dict. No command typing required â€” the widget
 type is chosen automatically ("line" for free text, "path" for a Browse
 button).
 """
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QFileDialog, QFormLayout, QGroupBox,
                                QPushButton, QSplitter, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget)
 
+from gui.widgets.device_status_bar import DeviceStatusBar
 from tools import available_tools, get_tool
 from tools.base import ForensicTool, ToolResult
 
@@ -54,6 +55,10 @@ class ToolsTab(QWidget):
         header = QLabel("External Tools")
         header.setObjectName("CardTitle")
         root.addWidget(header)
+
+        self.device_bar = DeviceStatusBar()
+        self.device_bar.device_changed.connect(self._on_device_changed)
+        root.addWidget(self.device_bar)
 
         splitter = QSplitter(Qt.Horizontal)
 
@@ -193,6 +198,33 @@ class ToolsTab(QWidget):
             self._target_widget.setText(path)
 
     # ---------- handlers ----------
+    def _on_device_changed(self, device) -> None:
+        """Called by the status bar when its state changes.
+
+        If the currently selected tool needs a device and none is present,
+        disable the Run button and explain why.
+        """
+        self._refresh_run_button()
+
+    def _refresh_run_button(self) -> None:
+        tool_cls = self._current_tool()
+        if tool_cls is None:
+            self.run_btn.setEnabled(False)
+            return
+        installed, _ = tool_cls.check()
+        needs_device = getattr(tool_cls, "requires_device", False)
+        have_device = self.device_bar.device_changed is not None and \
+                      self.device_bar.dot.text() == "\u25CF"
+        if not installed:
+            self.run_btn.setEnabled(False)
+            self.run_btn.setToolTip("Tool not installed")
+        elif needs_device and not have_device:
+            self.run_btn.setEnabled(False)
+            self.run_btn.setToolTip("Connect a phone via USB and allow debugging first")
+        else:
+            self.run_btn.setEnabled(True)
+            self.run_btn.setToolTip("")
+
     def _current_tool(self) -> type[ForensicTool] | None:
         item = self.list.currentItem()
         if item is None:
@@ -213,7 +245,7 @@ class ToolsTab(QWidget):
         )
         self.info.setOpenExternalLinks(True)
         self._rebuild_form(tool_cls)
-        self.run_btn.setEnabled(installed)
+        self._refresh_run_button()
 
     def _recheck(self) -> None:
         for i in range(self.list.count()):

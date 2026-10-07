@@ -32,6 +32,7 @@ class ForensicTool(ABC):
     description: str = ""
     homepage: str = ""
     binary_name: str = ""
+    requires_device: bool = False      # must a live phone be connected?
 
     # Declarative UI hints read by gui/tabs/tools_tab.py.
     # target_widget: "line" (free text) or "path" (Browse button)

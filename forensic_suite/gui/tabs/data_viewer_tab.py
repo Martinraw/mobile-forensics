@@ -1,4 +1,7 @@
-"""Data Viewer: clickable category tree + rich searchable table."""
+"""Data Viewer: real SQLite-backed category tree + searchable table.
+
+No mock data — every row comes from the Artifact table for the active case.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -10,78 +13,40 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QSplitter,
 
 from widgets.data_table import DataTable
 
+# (label, db_category, icon). Order matches the extraction writer.
 CATEGORIES = [
-    ("Call Logs", "calls", "\U0001F4DE"),
-    ("Messages", "messages", "\U0001F4AC"),
-    ("Contacts", "contacts", "\U0001F465"),
-    ("Media", "media", "\U0001F4F7"),
-    ("Locations", "locations", "\U0001F4CD"),
-    ("Apps", "apps", "\U0001F4E6"),
-    ("Cloud Data", "cloud", "\u2601\uFE0F"),
-    ("Deleted Items", "deleted", "\U0001F5D1\uFE0F"),
+    ("Call Logs",    "calls",     "\U0001F4DE"),
+    ("Messages",     "sms",       "\U0001F4AC"),
+    ("Contacts",     "contacts",  "\U0001F465"),
+    ("Media",        "media",     "\U0001F4F7"),
+    ("Locations",    "locations", "\U0001F4CD"),
+    ("Apps",         "apps",      "\U0001F4E6"),
+    ("Cloud Data",   "cloud",     "\u2601\uFE0F"),
+    ("Deleted Items","deleted",   "\U0001F5D1\uFE0F"),
 ]
 
+# Columns are keyed by db_category. Every artifact type has its own shape;
+# unknown categories fall back to Timestamp/Source/Content.
 _HEADERS = {
-    "calls": ["Timestamp", "Number", "Direction", "Duration"],
-    "messages": ["Timestamp", "From", "To", "Content"],
-    "contacts": ["Name", "Phone", "Email"],
-    "media": ["Timestamp", "File", "Type", "Size"],
-    "locations": ["Timestamp", "Coordinates", "Place"],
-    "apps": ["Package", "Version", "Installed"],
-    "cloud": ["Service", "Item", "Last Modified"],
-    "deleted": ["Recovered from", "Type", "Content"],
-}
-
-_MOCK_ROWS = {
-    "calls": [
-        ["2024-02-05 09:30", "+260 97 123 4567", "Incoming", "84 s"],
-        ["2024-02-04 20:00", "+260 96 765 4321", "Outgoing", "12 m"],
-        ["2024-02-03 08:15", "+260 77 555 1212", "Missed", "\u2014"],
-    ],
-    "messages": [
-        ["2024-02-05 10:12", "Alice Mwamba", "You", "Meet at 10am tomorrow?"],
-        ["2024-02-05 10:15", "You", "Alice Mwamba", "Sure, the usual caf\u00e9."],
-        ["2024-02-04 22:01", "Brian Tembo", "You", "Send the files now."],
-        ["2024-02-03 18:44", "WhatsApp", "You", "Voice note (0:42)"],
-    ],
-    "contacts": [
-        ["Alice Mwamba", "+260 97 123 4567", "alice@example.com"],
-        ["Brian Tembo", "+260 96 765 4321", "brian@example.com"],
-        ["Carol Banda", "+260 77 555 1212", "carol.b@example.com"],
-    ],
-    "media": [
-        ["2024-02-01 14:03", "IMG_20240201.jpg", "Photo", "2.4 MB"],
-        ["2024-02-03 19:21", "VID_20240203.mp4", "Video", "184 MB"],
-        ["2024-02-05 07:55", "IMG_20240205.jpg", "Photo", "1.8 MB"],
-    ],
-    "locations": [
-        ["2024-02-02 12:00", "-15.3875, 28.3228", "Lusaka CBD"],
-        ["2024-02-04 16:30", "-15.4214, 28.2873", "East Park Mall"],
-    ],
-    "apps": [
-        ["com.whatsapp", "2.24.1", "2024-01-20"],
-        ["org.telegram.messenger", "10.3", "2024-01-22"],
-        ["com.instagram.android", "328", "2024-02-01"],
-    ],
-    "cloud": [
-        ["Google Drive", "case_notes.pdf", "2024-02-04"],
-        ["Google Drive", "backup_0211.zip", "2024-02-05"],
-    ],
-    "deleted": [
-        ["msgstore.db (WAL)", "Message", "Recovered message #1"],
-        ["call_log.db", "Call", "Recovered call #2"],
-        ["thumbnail cache", "Media", "IMG_20240128.jpg"],
-    ],
+    "calls":     ["Timestamp", "Number", "Sender", "Recipient", "Source"],
+    "sms":       ["Timestamp", "Sender", "Recipient", "Content", "Source"],
+    "contacts":  ["Timestamp", "Sender", "Recipient", "Content", "Source"],
+    "media":     ["Timestamp", "Sender", "Recipient", "Content", "Source"],
+    "locations": ["Timestamp", "Coordinates", "Content", "Source"],
+    "apps":      ["Timestamp", "Content", "Source"],
+    "cloud":     ["Timestamp", "Content", "Source"],
+    "deleted":   ["Timestamp", "Content", "Source"],
 }
 
 
 class DataViewerTab(QWidget):
-    """Left tree of evidence categories; right pane shows the data."""
+    """Left tree of evidence categories; right pane shows real DB rows."""
 
     def __init__(self, ctx, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.ctx = ctx
-        self._on_select = None  # set by the main window
+        self._on_select = None
+        self._case_id: str | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 18, 18, 18)
@@ -115,28 +80,93 @@ class DataViewerTab(QWidget):
         self.table.table.itemSelectionChanged.connect(self._row_selected)
         layout.addWidget(splitter, 1)
 
-        self._populate_tree("SIMULATED-BENCH-01")
+        self._populate_tree()
 
-    def _populate_tree(self, device_name: str) -> None:
+    # ---------- tree ----------
+    def _populate_tree(self) -> None:
+        """Rebuild the category tree, showing real row counts per category."""
         self.tree.clear()
-        root = QTreeWidgetItem([f"\U0001F4F1  {device_name}"])
-        root.setFlags(root.flags())
+        device_label = self._case_id or "No case selected"
+        root = QTreeWidgetItem([f"\U0001F4F1  {device_label}"])
         self.tree.addTopLevelItem(root)
         self._items = {}
-        for key, label, icon in CATEGORIES:
-            item = QTreeWidgetItem([f"{icon}  {label}"])
+
+        counts = self._category_counts()
+        for label, key, icon in CATEGORIES:
+            n = counts.get(key, 0)
+            item = QTreeWidgetItem([f"{icon}  {label}  ({n})"])
             item.setData(0, Qt.UserRole, key)
             root.addChild(item)
             self._items[key] = item
         root.setExpanded(True)
 
+    def _category_counts(self) -> dict[str, int]:
+        """Query the DB for per-category counts on the active case."""
+        if not self._case_id:
+            return {}
+        try:
+            from sqlalchemy import func, select
+            from core.database import Artifact, Case
+            with self.ctx.case_manager.db.session() as s:
+                case = s.scalar(select(Case).where(Case.case_id == self._case_id))
+                if case is None:
+                    return {}
+                rows = s.execute(
+                    select(Artifact.category, func.count(Artifact.id))
+                    .where(Artifact.case_id == case.id)
+                    .group_by(Artifact.category)
+                ).all()
+            return {c: n for c, n in rows}
+        except Exception as exc:
+            self.ctx.log(f"Category counts failed: {exc}", "#FF6B6B")
+            return {}
+
+    # ---------- data ----------
     def _category_clicked(self, item: QTreeWidgetItem) -> None:
         key = item.data(0, Qt.UserRole)
-        if not key:
+        if not key or not self._case_id:
             return
-        rows = _MOCK_ROWS.get(key, [])
-        self.table.set_data(_HEADERS.get(key, ["Value"]), rows)
-        self.ctx.log(f"Opened category: {key} ({len(rows)} rows)", "#00E5FF")
+        headers, rows = self._fetch_rows(key)
+        self.table.set_data(headers, rows)
+        self.ctx.log(f"Loaded {key}: {len(rows)} rows", "#00E5FF")
+
+    def _fetch_rows(self, category: str) -> tuple[list[str], list[list[str]]]:
+        """Return (headers, rows) from the Artifact table for this category."""
+        headers = _HEADERS.get(category, ["Timestamp", "Content", "Source"])
+        try:
+            from sqlalchemy import select
+            from core.database import Artifact, Case
+            with self.ctx.case_manager.db.session() as s:
+                case = s.scalar(select(Case).where(Case.case_id == self._case_id))
+                if case is None:
+                    return headers, []
+                arts = s.execute(
+                    select(Artifact)
+                    .where(Artifact.case_id == case.id,
+                           Artifact.category == category)
+                    .order_by(Artifact.timestamp.desc())
+                ).scalars().all()
+
+            out: list[list[str]] = []
+            for a in arts:
+                ts = a.timestamp.strftime("%Y-%m-%d %H:%M:%S") if a.timestamp else ""
+                src = a.source or ""
+                if category == "calls":
+                    out.append([ts, a.sender or "", a.sender or "", a.recipient or "", src])
+                elif category in ("sms", "messages"):
+                    out.append([ts, a.sender or "", a.recipient or "",
+                                a.content or "", src])
+                elif category == "locations":
+                    out.append([ts, a.content or "", a.content or "", src])
+                elif category in ("apps", "cloud", "deleted"):
+                    out.append([ts, a.content or "", src])
+                else:
+                    out.append([ts, a.sender or "", a.recipient or "",
+                                a.content or "", src])
+            return headers, out
+        except Exception as exc:
+            self.ctx.log(f"Row fetch failed: {exc}", "#FF6B6B")
+            return headers, []
 
     def _row_selected(self) -> None:
         row = self.table.selected_row()
@@ -148,12 +178,15 @@ class DataViewerTab(QWidget):
         self._on_select(row, md5, sha)
 
     def _reload(self) -> None:
-        self._populate_tree("SIMULATED-BENCH-01")
+        self._populate_tree()
         self.ctx.log("Data viewer refreshed", "#8B949E")
 
+    # ---------- external API ----------
     def set_selection_callback(self, callback) -> None:
         self._on_select = callback
 
     def set_case(self, case_id: str) -> None:
+        self._case_id = case_id
         self.case_label.setText(f"Case: {case_id}")
+        self._populate_tree()
         self.ctx.log(f"Viewing case {case_id}", "#8B949E")
