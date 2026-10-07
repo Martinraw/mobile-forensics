@@ -13,3 +13,21 @@ settings.ini
 *.log
 cases/
 *.db
+
+# Bundled external tool binaries
+forensic_suite/tools/bin/windows/
+forensic_suite/tools/bin/linux/
+forensic_suite/tools/bin/darwin/
+!forensic_suite/tools/bin/README.md
+
+# Bundled ALEAPP PyInstaller runtime (users download separately)
+forensic_suite/tools/bin/windows/aleapp/
+forensic_suite/tools/bin/linux/
+forensic_suite/tools/bin/darwin/
+!forensic_suite/tools/bin/README.md
+!forensic_suite/tools/bin/windows/phoneinfoga.exe
+
+# Local editor/scratch backups
+*.bak_*
+project_sizes.txt
+project_structure.txt

@@ -19,15 +19,14 @@ from gui.tabs.extraction_tab import ExtractionTab
 from gui.tabs.reports_tab import ReportsTab
 from gui.tabs.settings_tab import SettingsTab
 from gui.tabs.timeline_tab import TimelineTab
+from gui.tabs.tools_tab import ToolsTab
 from gui.toolbar import TopToolBar
 
-TAB_KEYS = ["dashboard", "extraction", "data", "timeline", "reports", "ai",
-            "settings"]
+TAB_KEYS = ["dashboard", "extraction", "data", "timeline", "reports",
+            "tools", "ai", "settings"]
 
 
 class Toast(QLabel):
-    """Small top-right notification that auto-hides."""
-
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
         self.setStyleSheet("QLabel{background:#1F2630;color:#00E5FF;"
@@ -53,8 +52,6 @@ class Toast(QLabel):
 
 
 class NewCaseDialog(QDialog):
-    """Modal form for creating a new investigation case."""
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("New case")
@@ -103,9 +100,8 @@ class NewCaseDialog(QDialog):
         self.result_data = data
         self.accept()
 
-class MainWindow(QMainWindow):
-    """Window shell that composes the whole suite together."""
 
+class MainWindow(QMainWindow):
     def __init__(self, ctx, config) -> None:
         super().__init__()
         self.ctx = ctx
@@ -132,7 +128,6 @@ class MainWindow(QMainWindow):
         self.show_tab("dashboard")
         QTimer.singleShot(500, self._first_refresh)
 
-    # ---- menus ----
     def _build_menus(self) -> None:
         menubar = self.menuBar()
 
@@ -155,6 +150,10 @@ class MainWindow(QMainWindow):
                                 f"Ctrl+{index}")
 
         tools_menu = menubar.addMenu("&Tools")
+        tools_menu.addAction("External Tools\u2026",
+                             lambda: self.show_tab("tools"),
+                             QKeySequence("Ctrl+T"))
+        tools_menu.addSeparator()
         tools_menu.addAction("Extraction", lambda: self.show_tab("extraction"),
                              QKeySequence("Ctrl+E"))
         tools_menu.addAction("Data Viewer", lambda: self.show_tab("data"),
@@ -180,6 +179,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
 
         self.toolbar = TopToolBar()
+        self.toolbar.setObjectName("MainToolBar")
         self.addToolBar(Qt.TopToolBarArea, self.toolbar)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -192,6 +192,7 @@ class MainWindow(QMainWindow):
         self.data_viewer = DataViewerTab(self.ctx)
         self.timeline = TimelineTab(self.ctx)
         self.reports = ReportsTab(self.ctx)
+        self.tools = ToolsTab(self.ctx)
         self.ai = AIAssistantTab(self.ctx)
         self.settings_tab = SettingsTab(self.ctx)
         for key, widget in (("dashboard", self.dashboard),
@@ -199,6 +200,7 @@ class MainWindow(QMainWindow):
                             ("data", self.data_viewer),
                             ("timeline", self.timeline),
                             ("reports", self.reports),
+                            ("tools", self.tools),
                             ("ai", self.ai),
                             ("settings", self.settings_tab)):
             self.tabs[key] = widget
@@ -218,7 +220,6 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         self.toast = Toast(central)
 
-    # ---- wiring ----
     def _wire_ctx(self) -> None:
         self.ctx.navigate = self.show_tab
         self.ctx.notify = self.notify
@@ -244,10 +245,11 @@ class MainWindow(QMainWindow):
         self.settings_tab.config_changed.connect(self._apply_config)
 
     def _build_shortcuts(self) -> None:
-        QShortcut(QKeySequence("Ctrl+N"), self,
-                  activated=self._new_case_dialog)
+        QShortcut(QKeySequence("Ctrl+N"), self, activated=self._new_case_dialog)
         QShortcut(QKeySequence("Ctrl+E"), self,
                   activated=lambda: self.show_tab("extraction"))
+        QShortcut(QKeySequence("Ctrl+T"), self,
+                  activated=lambda: self.show_tab("tools"))
         QShortcut(QKeySequence("Ctrl+F"), self, activated=self._focus_search)
         QShortcut(QKeySequence("F5"), self, activated=self._refresh_all)
         QShortcut(QKeySequence("Ctrl+,"), self,
@@ -271,7 +273,6 @@ class MainWindow(QMainWindow):
     def log(self, message: str, color: str = "#8B949E") -> None:
         self.right_panel.log(message, color)
 
-    # ---- actions ----
     def _show_selection(self, info: dict, md5: str, sha: str) -> None:
         self.right_panel.show_selection(info)
         self.right_panel.show_hashes(md5, sha)
@@ -362,7 +363,6 @@ class MainWindow(QMainWindow):
         palette.setColor(QPalette.HighlightedText, QColor("#04121F"))
         app.setPalette(palette)
 
-    # ---- persistence / lifecycle ----
     def _load_geometry(self) -> None:
         geometry = self.settings.value("geometry")
         state = self.settings.value("windowState")
@@ -391,6 +391,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self, "Keyboard shortcuts",
             "Ctrl+N   New case\nCtrl+E   Extraction tab\n"
-            "Ctrl+F   Search artifacts\nCtrl+1..7   Switch tabs\n"
+            "Ctrl+T   External tools\n"
+            "Ctrl+F   Search artifacts\nCtrl+1..8   Switch tabs\n"
             "F5       Refresh all\nCtrl+,    Settings\n"
             "Ctrl+Q   Quit")

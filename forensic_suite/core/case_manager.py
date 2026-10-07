@@ -2,20 +2,20 @@
 from __future__ import annotations
 
 import getpass
+import json
 import random
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 
 from .database import (Artifact, AuditEntry, Case, Database, DeviceProfile,
-                       Extraction)
+                       Extraction, ToolRun)
 
 
 class CaseManager:
     def __init__(self, db: Database) -> None:
         self.db = db
 
-    # ---------- cases ----------
     def create_case(self, case_id: str, title: str, examiner: str,
                     authorization: str) -> Case:
         with self.db.session() as s:
@@ -55,7 +55,6 @@ class CaseManager:
             s.delete(case)
             return True
 
-# ---------- artifacts / audit ----------
     def add_artifact(self, case_id: str, category: str, content: str,
                      sender: str = "", recipient: str = "", source: str = "",
                      timestamp: datetime | None = None) -> Artifact:
@@ -87,14 +86,13 @@ class CaseManager:
                      "action": e.action, "details": e.details,
                      "case": case_ids.get(e.case_id, "?")} for e in rows]
 
-    # ---------- extractions ----------
     def list_extractions(self) -> list[dict]:
         with self.db.session() as s:
             rows = s.execute(select(Extraction).order_by(Extraction.id.desc())).scalars().all()
             return [{"id": e.id, "device": e.device, "method": e.method,
                      "status": e.status,
-                     "started": e.started_at.strftime("%Y-%m-%d %H:%M:%S") if e.started_at else "—",
-                     "finished": e.finished_at.strftime("%Y-%m-%d %H:%M:%S") if e.finished_at else "—",
+                     "started": e.started_at.strftime("%Y-%m-%d %H:%M:%S") if e.started_at else "-",
+                     "finished": e.finished_at.strftime("%Y-%m-%d %H:%M:%S") if e.finished_at else "-",
                      "files": e.files, "size_bytes": e.size_bytes} for e in rows]
 
     def record_extraction(self, case_id: str, device: str, method: str,
@@ -109,7 +107,39 @@ class CaseManager:
                              finished_at=None if status == "running" else now,
                              files=files, size_bytes=size_bytes))
 
-# ---------- dashboard statistics ----------
+    def add_tool_run(self, case_id: str, tool: str, target: str,
+                     status: str, command: str = "", duration_s: float = 0.0,
+                     output: dict | None = None) -> ToolRun:
+        with self.db.session() as s:
+            case = s.scalar(select(Case).where(Case.case_id == case_id))
+            if case is None:
+                raise ValueError(f"Unknown case '{case_id}'.")
+            run = ToolRun(
+                case_id=case.id, tool=tool, target=target, status=status,
+                command=command, duration_s=duration_s,
+                output_json=json.dumps(output or {}, ensure_ascii=False),
+            )
+            s.add(run)
+            s.flush()
+            s.add(AuditEntry(case_id=case.id, user=getpass.getuser(),
+                             action="tool_run",
+                             details=f"tool={tool} target={target} status={status}"))
+            return run
+
+    def list_tool_runs(self, case_id: str | None = None) -> list[dict]:
+        with self.db.session() as s:
+            stmt = select(ToolRun).order_by(ToolRun.started_at.desc())
+            if case_id:
+                case = s.scalar(select(Case).where(Case.case_id == case_id))
+                if case is None:
+                    return []
+                stmt = stmt.where(ToolRun.case_id == case.id)
+            rows = s.execute(stmt).scalars().all()
+            return [{"tool": r.tool, "target": r.target, "status": r.status,
+                     "started": r.started_at.strftime("%Y-%m-%d %H:%M:%S"),
+                     "duration_s": round(r.duration_s, 2),
+                     "output": json.loads(r.output_json or "{}")} for r in rows]
+
     def stats(self) -> dict:
         with self.db.session() as s:
             cases = s.scalar(select(func.count(Case.id))) or 0
@@ -126,8 +156,7 @@ class CaseManager:
                     DeviceProfile.platform)).all())
             activity = self._activity(s, days=7)
         return {
-            "cases": cases,
-            "devices": devices,
+            "cases": cases, "devices": devices,
             "data_bytes": data_bytes,
             "data_gb": round(data_bytes / (1024 ** 3), 1),
             "active_tasks": active,
@@ -150,12 +179,10 @@ class CaseManager:
             result.append((day.isoformat(), counts.get(day.isoformat(), 0)))
         return result
 
-    # ---------- demo data ----------
     def seed_demo(self) -> None:
-        """Populate a small synthetic dataset so the dashboard is alive."""
         with self.db.session() as s:
             if s.scalar(select(func.count(Case.id))):
-                return  # already seeded
+                return
             demo = Case(case_id="DEMO001", title="Synthetic demo case",
                         examiner="analyst", authorization_ref="SIM-TEST-ONLY")
             s.add(demo)
@@ -174,7 +201,7 @@ class CaseManager:
                              finished_at=_utcnow() - timedelta(days=3),
                              files=12486, size_bytes=3_400_000_000))
             samples = {
-                "sms": ["Hi, are we meeting tomorrow?", "Yes 10am at the café",
+                "sms": ["Hi, are we meeting tomorrow?", "Yes 10am at the cafe",
                         "Got the package, sending the files", "Call me when free"],
                 "calls": ["+260 97 123 4567", "+260 96 765 4321", "+260 77 555 1212"],
                 "contacts": ["Alice Mwamba", "Brian Tembo", "Carol Banda"],
@@ -184,9 +211,8 @@ class CaseManager:
                 "cloud": ["Drive: case_notes.pdf", "Drive: backup_0211.zip"],
                 "deleted": ["Recovered msg #1", "Recovered msg #2", "Thumbnail cache"],
             }
-            base = 7
             for category, items in samples.items():
-                for _, item in enumerate(items):
+                for item in items:
                     ts = _utcnow() - timedelta(days=random.randint(0, 6),
                                               hours=random.randint(0, 23))
                     s.add(Artifact(case_id=demo.id, category=category, content=item,

@@ -11,15 +11,14 @@ NAV_ITEMS = [
     ("data", "\U0001F50D", "Data Viewer"),
     ("timeline", "\U0001F4C8", "Timeline"),
     ("reports", "\U0001F4C4", "Reports"),
+    ("tools", "\U0001F6E0\uFE0F", "Tools"),
     ("ai", "\U0001F916", "AI Assistant"),
     ("settings", "\u2699\uFE0F", "Settings"),
 ]
 
 
 class Sidebar(QFrame):
-    """Darkened vertical rail with exclusive section navigation."""
-
-    navigation_requested = Signal(str)  # emits the tab key
+    navigation_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)

@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy import (DateTime, Float, ForeignKey, Integer, String, Text,
+                        create_engine)
 from sqlalchemy.orm import (DeclarativeBase, Mapped, Session, mapped_column,
                             relationship, sessionmaker)
 
@@ -39,6 +40,8 @@ class Case(Base):
     extractions: Mapped[list["Extraction"]] = relationship(
         back_populates="case", cascade="all, delete-orphan")
     audit_entries: Mapped[list["AuditEntry"]] = relationship(
+        back_populates="case", cascade="all, delete-orphan")
+    tool_runs: Mapped[list["ToolRun"]] = relationship(
         back_populates="case", cascade="all, delete-orphan")
 
 
@@ -100,13 +103,23 @@ class DeviceProfile(Base):
     last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class ToolRun(Base):
+    __tablename__ = "tool_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("cases.id"), index=True)
+    tool: Mapped[str] = mapped_column(String(64), index=True)
+    target: Mapped[str] = mapped_column(String(255))
+    command: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(32), default="ok")
+    duration_s: Mapped[float] = mapped_column(Float, default=0.0)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    output_json: Mapped[str] = mapped_column(Text, default="")
+
+    case: Mapped["Case"] = relationship(back_populates="tool_runs")
+
+
 class Database:
-    """Owns the engine and exposes a session context manager.
-
-    ``check_same_thread=False`` is required because Qt workers touch the DB
-    from worker threads.
-    """
-
     def __init__(self, path: str | Path | None = None) -> None:
         if path is None:
             path = default_db_path()
