@@ -113,6 +113,18 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Forensic Suite \u2014 Mobile Device Analysis")
         self.resize(1440, 900)
 
+        # Explicit window flags so Linux WMs (XFCE/GNOME/KDE) render
+        # working minimize / maximize / close buttons + the system menu.
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.WindowMinimizeButtonHint
+            | Qt.WindowMaximizeButtonHint
+            | Qt.WindowCloseButtonHint
+            | Qt.WindowSystemMenuHint
+        )
+        self.setMinimumSize(900, 600)
+        self.setMaximumSize(16777215, 16777215)
+
         self._build_menus()
         self._build_central()
         self._wire_ctx()
@@ -380,6 +392,18 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if self.toast is not None:
             self.toast._move()
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        """Double-click on the top toolbar toggles maximize (Linux fallback)."""
+        from PySide6.QtWidgets import QToolBar
+        widget = self.childAt(event.position().toPoint())
+        if isinstance(widget, QToolBar) or (widget is not None
+                                            and widget.parent() is self.toolbar):
+            if self.isMaximized():
+                self.showNormal()
+            else:
+                self.showMaximized()
+        super().mouseDoubleClickEvent(event)
 
     def _about(self) -> None:
         QMessageBox.about(

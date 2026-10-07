@@ -648,3 +648,14 @@ QFrame#SidebarFooter {
 /* ============================================================================
    End of dark theme
    ========================================================================== */
+/* ---------------------------------------------------------------
+   Linux/compositor fix: force opaque backgrounds.
+   Without this, `QWidget { background-color: transparent; }` lets
+   the window manager composite the desktop behind the app.
+   --------------------------------------------------------------- */
+QMainWindow,
+QMainWindow > QWidget,
+QMainWindow QWidget#CentralWidget,
+QMainWindow QStackedWidget {
+    background-color: #0D1117;
+}

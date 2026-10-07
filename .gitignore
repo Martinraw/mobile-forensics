@@ -31,3 +31,5 @@ forensic_suite/tools/bin/darwin/
 *.bak_*
 project_sizes.txt
 project_structure.txt
+*.bak
+*.bak_*

@@ -1,8 +1,9 @@
-"""Forensic Suite \u2014 entry point.
+"""Forensic Suite — entry point.
 
 Run with::
 
-    python main.py
+    python main.py            # normal mode (empty DB until you extract)
+    python main.py --demo     # seeds synthetic demo data for UI testing
 """
 from __future__ import annotations
 
@@ -33,7 +34,11 @@ def main() -> int:
     database = Database()
     database.create_all()
     case_manager = CaseManager(database)
-    case_manager.seed_demo()
+
+    # Only seed synthetic demo data when explicitly requested.
+    if "--demo" in sys.argv:
+        case_manager.seed_demo()
+
     ai_client = AIClient(config)
     ctx = AppContext(db=database, config=config, case_manager=case_manager,
                      ai_client=ai_client)
@@ -47,6 +52,15 @@ def main() -> int:
     app.setFont(QFont("Segoe UI", font_size))
 
     window = MainWindow(ctx, config)
+
+    # Force opaque painting on Linux compositors. Without these, the
+    # window's background defaults to transparent and shows through to
+    # whatever is behind it.
+    from PySide6.QtCore import Qt
+    window.setAttribute(Qt.WA_OpaquePaintEvent, True)
+    window.setAttribute(Qt.WA_NoSystemBackground, False)
+    window.setAutoFillBackground(True)
+
     window.show()
     return app.exec()
 
