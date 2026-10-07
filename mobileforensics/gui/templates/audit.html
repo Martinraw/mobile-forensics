@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% block content %}
+<p><a href="{{ url_for('case_view', case_id=case_id) }}">&larr; Back to case {{ case_id }}</a></p>
+<h1>Audit log</h1>
+<p>Integrity: {% if audit_ok %}<span class="badge ok">chain intact</span>{% else %}<span class="badge bad">LOG HAS BEEN ALTERED</span>{% endif %}</p>
+<div class="card">
+<table>
+  <tr><th>#</th><th>Time (UTC)</th><th>User</th><th>Action</th><th>Details</th><th>Entry hash</th></tr>
+  {% for e in entries %}
+  <tr><td>{{ loop.index }}</td><td>{{ e.time_utc }}</td><td>{{ e.user }}</td><td>{{ e.action }}</td>
+  <td><code>{{ e.details }}</code></td><td><code>{{ e.entry_hash[:16] }}...</code></td></tr>
+  {% endfor %}
+</table>
+</div>
+{% endblock %}

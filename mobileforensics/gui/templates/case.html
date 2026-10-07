@@ -1,0 +1,200 @@
+{% extends 'base.html' %}
+{% block title %}Case {{ case.case_id }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('index') }}">&larr; All cases</a></p>
+<h1>Case {{ case.case_id }}</h1>
+<div class="row muted">
+  <span>Examiner: {{ case.examiner }}</span><span>Authorization: {{ case.authorization_ref }}</span><span>Created: {{ case.created_utc }}</span>
+  <span>Audit log: {% if audit_ok %}<span class="badge ok">intact</span>{% else %}<span class="badge bad">ALTERED</span>{% endif %}
+  <a href="{{ url_for('audit_view', case_id=case.case_id) }}">view</a></span>
+  {% if running %}<span class="badge run" id="running" data-job="{{ running }}">job running...</span>{% endif %}
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>1. Acquire from device</h2>
+    <p class="muted">Android: USB debugging on, phone unlocked and authorized. iOS: unlocked and trusted.</p>
+    <form method="post" action="{{ url_for('detect', case_id=case.case_id) }}" style="display:inline">
+      <input type="hidden" name="token" value="{{ token }}"><button class="secondary" type="submit">Detect device</button>
+    </form>
+    <form method="post" action="{{ url_for('acquire', case_id=case.case_id) }}">
+      <input type="hidden" name="token" value="{{ token }}">
+      <div class="check"><input type="checkbox" name="confirm" value="yes" id="confirm" required>
+      <label for="confirm" style="margin:0">I confirm I have lawful authority or the owner's consent to acquire data from this device.</label></div>
+      <button type="submit" {% if running %}disabled{% endif %}>Start acquisition</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>2. Import existing evidence</h2>
+    <p class="muted">Image or folder made by another tool (file system or physical). The original is not modified.</p>
+    <form method="post" action="{{ url_for('import_ev', case_id=case.case_id) }}">
+      <input type="hidden" name="token" value="{{ token }}">
+      <label>Path to file or folder</label><input type="text" name="path" required placeholder="/path/to/image.E01">
+      <button type="submit" {% if running %}disabled{% endif %}>Import</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>3. WhatsApp</h2>
+    <form method="post" action="{{ url_for('wa_decrypt', case_id=case.case_id) }}">
+      <input type="hidden" name="token" value="{{ token }}">
+      <label>Encrypted backup (msgstore.db.crypt14/15)</label><input type="text" name="path" required>
+      <label>Key file path or 64-character key (lawfully obtained)</label><input type="password" name="key" required autocomplete="off">
+      <button type="submit" {% if running %}disabled{% endif %}>Decrypt</button>
+    </form>
+    <hr style="border-color:var(--line);margin:16px 0">
+    <form method="post" action="{{ url_for('wa_parse', case_id=case.case_id) }}">
+      <input type="hidden" name="token" value="{{ token }}">
+      <label>Database to parse (working copy of msgstore.db)</label><input type="text" name="path" required placeholder="cases/{{ case.case_id }}/whatsapp/msgstore.db">
+      <button type="submit" {% if running %}disabled{% endif %}>Parse into case</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>4. Report</h2>
+    <form method="post" action="{{ url_for('make_report', case_id=case.case_id) }}">
+      <input type="hidden" name="token" value="{{ token }}">
+      <div class="check"><input type="checkbox" name="pdf" value="yes" id="pdf"><label for="pdf" style="margin:0">Also create PDF (needs weasyprint)</label></div>
+      <button type="submit" {% if running %}disabled{% endif %}>Generate report</button>
+    </form>
+    {% if has_report %}<p><a href="{{ url_for('report_file', case_id=case.case_id) }}" target="_blank">Open report</a> &middot; <a href="{{ url_for('report_csv', case_id=case.case_id) }}">Download CSV</a></p>{% endif %}
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>Connected device</h2>
+    {% if device %}
+      {% set d = device.get('details') or {} %}
+      <p><strong>{{ d.get('platform')|default('unknown') }}</strong> &middot; {{ d.get('model')|default('unknown model') }} &middot; OS {{ d.get('os_version')|default('?') }}</p>
+      <p class="muted"><code>{{ d.get('serial')|default('unknown') }}</code> &middot; {% if d.get('is_rooted') %}rooted{% else %}not rooted{% endif %} &middot; seen {{ device.get('time_utc') }}</p>
+    {% else %}
+      <p class="muted">No device detected yet. Run &ldquo;Detect device&rdquo; above.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Evidence &amp; integrity</h2>
+    {% if storage %}
+    <div class="table-wrap"><table>
+      <tr><th>Folder</th><th>Files</th><th>Size</th><th>Verification</th></tr>
+      {% for s in storage %}
+      <tr><td><code>{{ s.folder }}</code></td><td>{{ s.files }}</td><td>{{ s.size|filesizeformat }}</td>
+      <td>{% if s.problems %}<span class="badge bad">{{ s.problems|join(', ') }}</span>{% else %}<span class="badge ok">all hashes match</span>{% endif %}</td></tr>
+      {% endfor %}
+    </table></div>
+    {% else %}
+      <p class="muted">No evidence acquired or imported for this case yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+{% if jobs %}
+<div class="card"><h2>Recent jobs</h2>
+<table><tr><th>Job</th><th>Status</th><th>Result</th></tr>
+{% for j in jobs %}<tr><td>{{ j.title }} ({{ j.id }})</td>
+<td>{% if j.status == 'done' %}<span class="badge ok">done</span>{% elif j.status == 'error' %}<span class="badge bad">error</span>{% else %}<span class="badge run">running</span>{% endif %}</td>
+<td>{{ j.message }}</td></tr>{% endfor %}</table></div>
+{% endif %}
+
+{% if manifests %}
+<div class="card" style="margin-top:16px"><h2>Evidence manifests</h2>
+<table><tr><th>Manifest</th><th>Verification</th></tr>
+{% for m in manifests %}<tr><td>{{ m.name }}</td>
+<td>{% if m.problems %}<span class="badge bad">{{ m.problems|join(', ') }}</span>{% else %}<span class="badge ok">all hashes match</span>{% endif %}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+
+<div class="card" style="margin-top:16px">
+  <div class="row" style="justify-content:space-between;margin-bottom:4px">
+    <h2 style="margin:0">Artifacts ({{ total }})</h2>
+    {% if total %}<a class="button-link" href="{{ url_for('artifacts_csv', case_id=case.case_id, q=q or None, app=app or None, sort=sort, order=order) }}">Export CSV</a>{% endif %}
+  </div>
+  {% if counts %}<p class="muted">{% for a, n in counts %}<a href="{{ url_for('case_view', case_id=case.case_id, app=a) }}">{{ a }}</a>: {{ n }}{% if not loop.last %} &middot; {% endif %}{% endfor %}</p>{% endif %}
+  <form method="get" class="toolbar" action="{{ url_for('case_view', case_id=case.case_id) }}">
+    <input type="search" name="q" value="{{ q }}" placeholder="Search content, sender, recipient or chat">
+    <select name="app" aria-label="Filter by app" onchange="this.form.submit()">
+      <option value="">All apps</option>
+      {% for a, n in counts %}<option value="{{ a }}" {% if a == app %}selected{% endif %}>{{ a }} ({{ n }})</option>{% endfor %}
+    </select>
+    <select name="sort" aria-label="Sort column" onchange="this.form.submit()">
+      {% set options = [('timestamp_utc', 'Time'), ('app', 'App'), ('artifact_type', 'Type'), ('sender', 'From'), ('recipient', 'To'), ('chat', 'Chat'), ('content', 'Content')] %}
+      {% for value, label in options %}<option value="{{ value }}" {% if value == sort %}selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select>
+    <select name="order" aria-label="Sort direction" onchange="this.form.submit()">
+      <option value="desc" {% if order == 'desc' %}selected{% endif %}>Newest first</option>
+      <option value="asc" {% if order == 'asc' %}selected{% endif %}>Oldest first</option>
+    </select>
+    <select name="page_size" aria-label="Page size" onchange="this.form.submit()">
+      {% for n in page_size_options %}<option value="{{ n }}" {% if n == page_size %}selected{% endif %}>{{ n }} per page</option>{% endfor %}
+    </select>
+    <button type="submit">Search</button>
+    {% if q or app %}<a class="clear" href="{{ url_for('case_view', case_id=case.case_id) }}">clear</a>{% endif %}
+  </form>
+  {% if rows %}
+  <div class="table-wrap"><table>
+    <tr><th></th><th>Time (UTC)</th><th>App</th><th>Type</th><th>From</th><th>To</th><th>Chat</th><th>Content</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td><button type="button" class="detail-toggle" data-id="{{ r.artifact_id }}" aria-expanded="false">details</button></td>
+      <td><time datetime="{{ r.timestamp_utc }}">{{ r.timestamp_utc }}</time></td>
+      <td>{{ r.app }}</td>
+      <td>{{ r.artifact_type or '' }}</td>
+      <td>{{ r.sender|highlight(q) }}</td>
+      <td>{{ r.recipient|highlight(q) }}</td>
+      <td>{{ r.chat|highlight(q) }}</td>
+      <td>{{ r.content|highlight(q) }}</td>
+    </tr>
+    <tr class="artifact-detail" id="detail-{{ r.artifact_id }}">
+      <td colspan="8">
+        <p class="muted" style="margin:0 0 4px"><strong>Source:</strong> <code>{{ r.source_file }}</code> &middot; {{ r.source_table }}#{{ r.source_rowid }}</p>
+        {% if r.attachment %}<p class="muted" style="margin:0 0 4px"><strong>Attachment:</strong> {{ r.attachment }}</p>{% endif %}
+        <p class="muted" style="margin:0"><strong>SHA-256 of source:</strong> <code>{{ r.source_sha256 }}</code></p>
+      </td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  <p class="muted">Showing {{ (page - 1) * page_size + 1 }} to {{ (page - 1) * page_size + rows|length }} of {{ total }}.</p>
+  {% if pages > 1 %}
+  <nav class="pagination" aria-label="Artifact pages">
+    <a href="{{ url_for('case_view', case_id=case.case_id, q=q or None, app=app or None, sort=sort, order=order, page_size=page_size, page=1) }}" {% if page == 1 %}class="disabled"{% endif %}>« First</a>
+    <a href="{{ url_for('case_view', case_id=case.case_id, q=q or None, app=app or None, sort=sort, order=order, page_size=page_size, page=page - 1) }}" {% if page == 1 %}class="disabled"{% endif %}>‹ Prev</a>
+    {% for p in page_window %}{% if p == page %}<span class="current">{{ p }}</span>{% else %}<a href="{{ url_for('case_view', case_id=case.case_id, q=q or None, app=app or None, sort=sort, order=order, page_size=page_size, page=p) }}">{{ p }}</a>{% endif %}{% endfor %}
+    <a href="{{ url_for('case_view', case_id=case.case_id, q=q or None, app=app or None, sort=sort, order=order, page_size=page_size, page=page + 1) }}" {% if page == pages %}class="disabled"{% endif %}>Next ›</a>
+    <a href="{{ url_for('case_view', case_id=case.case_id, q=q or None, app=app or None, sort=sort, order=order, page_size=page_size, page=pages) }}" {% if page == pages %}class="disabled"{% endif %}>Last »</a>
+  </nav>
+  {% endif %}
+  {% else %}
+  <p class="muted">{% if q or app %}No artifacts match the current filter. <a class="clear" href="{{ url_for('case_view', case_id=case.case_id) }}">Clear filters</a>.{% else %}No artifacts yet. Parse a WhatsApp database or import evidence to populate this case.{% endif %}</p>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  // expandable artifact detail rows
+  var toggles = document.querySelectorAll('.detail-toggle');
+  toggles.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var row = document.getElementById('detail-' + btn.getAttribute('data-id'));
+      if (!row) return;
+      var open = row.classList.toggle('open');
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      btn.textContent = open ? 'hide' : 'details';
+    });
+  });
+  // auto-refresh while a background job runs
+  var el = document.getElementById('running');
+  if (el) {
+    var id = el.getAttribute('data-job');
+    var timer = setInterval(function () {
+      fetch('/jobs/' + id).then(function (r) { return r.json(); }).then(function (j) {
+        if (j.status !== 'running') { clearInterval(timer); window.location.reload(); }
+      });
+    }, 2000);
+  }
+})();
+</script>
+{% endblock %}

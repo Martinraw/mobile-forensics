@@ -1,0 +1,25 @@
+# =====================================================================
+# Forensic Suite — desktop-class mobile forensics GUI (PySide6)
+# =====================================================================
+
+# Core GUI framework (Qt for Python) — windows, widgets, signals/slots
+PySide6>=6.7.0
+
+# Charts: bar / donut / line figures rendered into Qt canvases
+matplotlib>=3.8.0
+
+# SQLite ORM for the local case database
+SQLAlchemy>=2.0.0
+
+# DeepSeek chat assistant (REST API client)
+requests>=2.31.0
+
+# Live CPU/RAM telemetry for the bottom status bar
+psutil>=5.9.0
+
+# Markdown -> HTML rendering and syntax highlighting for the AI panel
+markdown>=3.5.0
+pygments>=2.17.0
+
+# Testing / development
+pytest>=8.0.0

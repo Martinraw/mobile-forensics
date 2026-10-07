@@ -1,0 +1,31 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Cases</h1>
+<p class="muted">Every case needs an examiner and an authorization reference (warrant, court order or written consent).</p>
+<div class="grid">
+  <div class="card">
+    <h2>New case</h2>
+    <form method="post" action="{{ url_for('create_case') }}">
+      <input type="hidden" name="token" value="{{ token }}">
+      <label>Case ID (letters, digits, - and _)</label>
+      <input type="text" name="case_id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]*">
+      <label>Examiner</label>
+      <input type="text" name="examiner" required>
+      <label>Authorization reference</label>
+      <input type="text" name="authorization" required placeholder="e.g. consent form 2026/014, warrant no.">
+      <button type="submit">Create case</button>
+    </form>
+  </div>
+  <div class="card">
+    <h2>Existing cases</h2>
+    {% if cases %}
+    <table>
+      <tr><th>Case</th><th>Examiner</th><th>Created (UTC)</th><th>Artifacts</th></tr>
+      {% for c in cases %}
+      <tr><td><a href="{{ url_for('case_view', case_id=c.case_id) }}">{{ c.case_id }}</a></td><td>{{ c.examiner }}</td><td>{{ c.created_utc }}</td><td>{{ c.artifacts }}</td></tr>
+      {% endfor %}
+    </table>
+    {% else %}<p class="muted">No cases yet. Create one to begin.</p>{% endif %}
+  </div>
+</div>
+{% endblock %}

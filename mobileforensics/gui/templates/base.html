@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Mobile Forensic Framework{% endblock %}</title>
+<style>
+:root{--bg:#0f1720;--panel:#17212c;--line:#2a3948;--text:#e6edf3;--muted:#9fb0c0;--accent:#3aa6ff;--ok:#2ecc71;--err:#ff6b6b;--warn:#f5b041}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.45}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+header{display:flex;justify-content:space-between;align-items:center;padding:12px 24px;background:#0b1118;border-bottom:1px solid var(--line)}
+header a.brand{color:var(--text);font-weight:700;text-decoration:none;font-size:18px}
+header span{color:var(--warn);font-size:13px}
+main{max-width:1200px;margin:0 auto;padding:20px 24px 60px}
+a{color:var(--accent)}
+h1{font-size:24px;margin:8px 0 4px}h2{font-size:17px;margin:0 0 10px}
+.muted{color:var(--muted);font-size:13px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;margin:16px 0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+input[type=text],input[type=password],input[type=search],select{width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--line);background:#0f1720;color:var(--text);font:inherit}
+button{margin-top:12px;padding:8px 14px;border:0;border-radius:6px;background:var(--accent);color:#04121f;font-weight:600;cursor:pointer;font:inherit}
+button.secondary{background:#2a3948;color:var(--text)}
+button:disabled{opacity:.5;cursor:not-allowed}
+.button-link{display:inline-block;padding:8px 14px;border-radius:6px;background:var(--accent);color:#04121f;font-weight:600;font-size:14px;text-decoration:none}
+table{width:100%;border-collapse:collapse;font-size:13px}
+.table-wrap{overflow-x:auto;margin-top:12px}
+.table-wrap th{position:sticky;top:0;background:var(--panel);z-index:1}
+th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top;word-break:break-word}
+th{color:var(--muted);font-weight:600}
+.flash{position:relative;padding:10px 32px 10px 14px;border-radius:8px;margin:10px 0;border:1px solid var(--line);transition:opacity .8s}
+.flash.ok{border-color:var(--ok);color:var(--ok)}.flash.error{border-color:var(--err);color:var(--err)}
+.flash.collapse{opacity:0}
+.flash .close{position:absolute;top:6px;right:8px;border:0;background:none;color:inherit;cursor:pointer;padding:0 4px;font-size:15px;line-height:1}
+.badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:600}
+.badge.ok{background:#12351f;color:var(--ok)}.badge.bad{background:#3a1717;color:var(--err)}.badge.run{background:#3a2f12;color:var(--warn)}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.check{display:flex;gap:8px;align-items:flex-start;margin-top:10px;font-size:13px}
+.check input{margin-top:3px}
+code{background:#0f1720;padding:1px 5px;border-radius:4px}
+mark{background:var(--warn);color:#04121f;padding:0 2px;border-radius:3px}
+.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px}
+.toolbar input[type=search],.toolbar select{width:auto;max-width:420px;flex:0 1 auto}
+.toolbar button{margin-top:0}
+.clear{font-size:13px}
+.detail-toggle{margin:0;padding:2px 8px;background:transparent;color:var(--accent);border:1px solid var(--line);border-radius:6px;font-weight:600;font-size:12px;white-space:nowrap}
+.artifact-detail{display:none}
+.artifact-detail.open{display:table-row}
+.artifact-detail td{background:#0f1720;font-size:12px}
+.pagination{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:12px}
+.pagination a,.pagination span{display:inline-block;padding:4px 9px;border-radius:6px;border:1px solid var(--line);color:var(--text);text-decoration:none;font-size:13px}
+.pagination a:hover{border-color:var(--accent)}
+.pagination a.disabled{opacity:.35;pointer-events:none}
+.pagination span.current{background:var(--accent);color:#04121f;font-weight:600;border-color:var(--accent)}
+</style>
+</head>
+<body>
+<header><a class="brand" href="{{ url_for('index') }}">Mobile Forensic Framework</a><span>Authorized use only. Local mode (127.0.0.1)</span></header>
+<main>
+{% with messages = get_flashed_messages(with_categories=true) %}{% for cat, msg in messages %}<div class="flash {{ cat }}">{{ msg }}</div>{% endfor %}{% endwith %}
+{% block content %}{% endblock %}
+</main>
+<script>
+(function () {
+  var msgs = document.querySelectorAll('.flash');
+  msgs.forEach(function (el) {
+    var btn = document.createElement('button');
+    btn.className = 'close'; btn.type = 'button'; btn.setAttribute('aria-label', 'Dismiss');
+    btn.textContent = '\u00d7';
+    btn.addEventListener('click', function () { el.remove(); });
+    el.appendChild(btn);
+    setTimeout(function () { el.classList.add('collapse'); }, 10000);
+  });
+})();
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

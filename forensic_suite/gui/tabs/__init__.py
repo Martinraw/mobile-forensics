@@ -1,0 +1,1 @@
+"""Feature tabs for the Forensic Suite main window."""
