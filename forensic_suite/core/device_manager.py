@@ -16,7 +16,7 @@ import platform
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 _NO_WINDOW = 0x08000000 if platform.system() == "Windows" else 0
@@ -74,6 +74,16 @@ def _adb_candidates() -> list[Path]:
                 out.append(p)
 
     # 4. Common manual locations
+    for env_var in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        sdk = os.environ.get(env_var)
+        if sdk:
+            out.append(Path(sdk) / "platform-tools" / exe)
+    if platform.system() != "Windows":
+        for fixed in ("/usr/bin", "/usr/local/bin", "/opt/homebrew/bin",
+                      "/opt/platform-tools"):
+            out.append(Path(fixed) / exe)
+        out.append(Path.home() / "Android" / "Sdk" / "platform-tools" / exe)
+        out.append(Path.home() / "Library" / "Android" / "sdk" / "platform-tools" / exe)
     out.append(Path("C:/platform-tools") / exe)
     out.append(Path.home() / "platform-tools" / exe)
     out.append(Path.home() / "AppData" / "Local" / "Android" / "Sdk" / "platform-tools" / exe)
@@ -103,71 +113,229 @@ def adb_available() -> tuple[bool, str]:
     return True, str(path)
 
 
-def connected_devices() -> list[DeviceInfo]:
-    """Run ``adb devices -l`` and return parsed devices.
+# adb states that mean "the phone is attached" but not usable yet, with the
+# fix the examiner needs to apply.
+STATE_HINTS = {
+    "unauthorized": "Unlock the phone and tap 'Allow' on the USB debugging prompt "
+                    "(tick 'Always allow from this computer').",
+    "offline": "Replug the cable, then run 'adb kill-server' and refresh.",
+    "no permissions": "Linux is blocking USB access. Install the Android udev rules "
+                      "(sudo apt install android-sdk-platform-tools-common) or add "
+                      "your user to the plugdev group, then replug.",
+    "recovery": "Phone is in recovery mode. Reboot it normally.",
+    "sideload": "Phone is in sideload mode. Reboot it normally.",
+    "bootloader": "Phone is in bootloader mode. Reboot it normally.",
+    "untrusted": "Unlock the iPhone and tap 'Trust' when asked, then enter the passcode.",
+}
+_KNOWN_STATES = ("device", "offline", "unauthorized", "recovery", "sideload",
+                 "bootloader", "no permissions", "host", "authorizing", "connecting")
 
-    Returns ``[]`` cleanly if adb is missing or the command fails.
-    """
-    adb = adb_path()
-    if adb is None:
-        return []
+# Details (OS version, root) are read once per serial, not on every poll.
+_DETAIL_CACHE: dict[str, dict] = {}
 
+
+@dataclass
+class Detection:
+    """Everything the GUI needs to explain the current device situation."""
+    devices: list = field(default_factory=list)
+    adb_ok: bool = False
+    adb_where: str = ""
+    ios_tools_ok: bool = False
+    message: str = ""
+    level: str = "idle"          # "ok" | "warn" | "error" | "idle"
+
+
+def _run(cmd: list[str], timeout: int = 10) -> tuple[int, str]:
+    """Run a command, never raise. Returns (returncode, stdout+stderr)."""
     try:
         proc = subprocess.run(
-            [str(adb), "devices", "-l"],
-            capture_output=True, text=True,
+            cmd, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
-            timeout=10, check=False,
+            timeout=timeout, check=False,
             creationflags=_NO_WINDOW,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return []
+        return -1, ""
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
-    if proc.returncode != 0:
-        return []
 
-    return _parse_devices(proc.stdout or "")
+def hint_for(device: DeviceInfo) -> str:
+    """Plain-language next step for a device that is not ready."""
+    return STATE_HINTS.get(device.state, "")
+
+
+def adb_devices() -> list[DeviceInfo]:
+    """Android devices from ``adb devices -l`` (``[]`` if adb is missing)."""
+    adb = adb_path()
+    if adb is None:
+        return []
+    code, out = _run([str(adb), "devices", "-l"])
+    if code != 0:
+        return []
+    return _parse_devices(out)
 
 
 def _parse_devices(stdout: str) -> list[DeviceInfo]:
-    """Parse the tabular output of ``adb devices -l``."""
+    """Parse the output of ``adb devices -l``.
+
+    Handles multi-word states such as ``no permissions (...)`` and ignores
+    the ``* daemon started`` chatter adb prints on first run.
+    """
     out: list[DeviceInfo] = []
-    # Skip the "List of devices attached" header and blank lines.
     for line in stdout.splitlines():
         line = line.strip()
-        if not line or line.lower().startswith("list of devices"):
+        if (not line or line.lower().startswith("list of devices")
+                or line.startswith("*") or line.startswith("adb server")):
             continue
-
-        # Format: <serial> <state> [key:value ...]
-        parts = re.split(r"\s+", line)
+        parts = line.split(None, 1)
         if len(parts) < 2:
             continue
-        serial = parts[0]
-        state = parts[1]
+        serial, rest = parts[0], parts[1].strip()
+
+        state = next((s for s in sorted(_KNOWN_STATES, key=len, reverse=True)
+                      if rest.lower().startswith(s)), None)
+        if state is None:
+            continue                      # not a device line
+        rest = rest[len(state):]
+
         attrs = {}
-        for token in parts[2:]:
+        for token in rest.split():
             if ":" in token:
                 k, v = token.split(":", 1)
                 attrs[k] = v
-
+        model = attrs.get("model", "unknown")
         out.append(DeviceInfo(
-            serial=serial,
-            model=attrs.get("model", "unknown"),
-            name=attrs.get("model", "unknown").replace("_", " "),
-            product=attrs.get("product", ""),
-            device=attrs.get("device", ""),
-            transport_id=attrs.get("transport_id", ""),
-            state=state,
+            serial=serial, model=model, name=model.replace("_", " "),
+            product=attrs.get("product", ""), device=attrs.get("device", ""),
+            transport_id=attrs.get("transport_id", ""), state=state,
         ))
     return out
 
 
+def ios_devices() -> list[DeviceInfo]:
+    """iPhones/iPads visible through libimobiledevice (``idevice_id -l``)."""
+    if shutil.which("idevice_id") is None:
+        return []
+    code, out = _run(["idevice_id", "-l"])
+    if code != 0:
+        return []
+    devices = []
+    for udid in (ln.strip() for ln in out.splitlines()):
+        if not re.fullmatch(r"[0-9A-Fa-f-]{20,}", udid):
+            continue
+        devices.append(DeviceInfo(
+            serial=udid, model="iPhone", name="iPhone", platform="iOS",
+            state="untrusted"))
+    return devices
+
+
+def _enrich_ios(dev: DeviceInfo) -> None:
+    if shutil.which("ideviceinfo") is None:
+        return
+    info = _DETAIL_CACHE.get(dev.serial)
+    if info is None:
+        values = {}
+        for key in ("DeviceName", "ProductType", "ProductVersion"):
+            code, out = _run(["ideviceinfo", "-u", dev.serial, "-k", key], timeout=8)
+            values[key] = out.strip() if code == 0 and "ERROR" not in out else ""
+            if not values[key]:
+                break                        # not trusted yet: skip the rest
+        if not any(values.values()):
+            return                           # not paired/trusted yet; don't cache
+        info = values
+        _DETAIL_CACHE[dev.serial] = info
+    dev.state = "device"
+    dev.model = info["ProductType"] or dev.model
+    dev.name = info["DeviceName"] or dev.name
+    dev.os_version = info["ProductVersion"]
+
+
+def _enrich_android(dev: DeviceInfo, adb: Path) -> None:
+    """Fill OS version / manufacturer / root flag (read-only queries)."""
+    info = _DETAIL_CACHE.get(dev.serial)
+    if info is None:
+        def prop(key: str) -> str:
+            code, out = _run([str(adb), "-s", dev.serial, "shell", "getprop", key], 6)
+            return out.strip() if code == 0 else ""
+        info = {
+            "os": prop("ro.build.version.release"),
+            "maker": prop("ro.product.manufacturer"),
+            "model": prop("ro.product.model"),
+        }
+        code, out = _run([str(adb), "-s", dev.serial, "shell", "su", "-c", "id"], 5)
+        info["rooted"] = code == 0 and "uid=0" in out
+        _DETAIL_CACHE[dev.serial] = info
+    dev.os_version = info["os"]
+    dev.rooted = info["rooted"]
+    if info["model"]:
+        dev.model = info["model"]
+        dev.name = f"{info['maker'].title()} {info['model']}".strip()
+
+
+def connected_devices(enrich: bool = False) -> list[DeviceInfo]:
+    """Android (ADB) plus iOS (libimobiledevice) devices currently attached."""
+    devices = adb_devices() + ios_devices()
+    if enrich:
+        adb = adb_path()
+        for dev in devices:
+            if dev.platform == "iOS":
+                _enrich_ios(dev)
+            elif dev.state == "device" and adb is not None:
+                _enrich_android(dev, adb)
+    live = {d.serial for d in devices}
+    for serial in list(_DETAIL_CACHE):
+        if serial not in live:
+            del _DETAIL_CACHE[serial]
+    return devices
+
+
+def detect(enrich: bool = True) -> Detection:
+    """Full detection pass with a human-readable explanation of the result."""
+    adb_ok, where = adb_available()
+    ios_ok = shutil.which("idevice_id") is not None
+    devices = connected_devices(enrich=enrich)
+    result = Detection(devices=devices, adb_ok=adb_ok, adb_where=where,
+                       ios_tools_ok=ios_ok)
+
+    if not adb_ok and not ios_ok:
+        result.level = "error"
+        result.message = (
+            "No device tools found. Install adb (Android: 'sudo apt install adb' "
+            "or Platform-Tools) and/or libimobiledevice (iPhone), "
+            "or set ADB_PATH, then press Detect.")
+        return result
+
+    ready = [d for d in devices if d.state == "device"]
+    blocked = [d for d in devices if d.state != "device"]
+    if ready:
+        names = ", ".join(d.display_name for d in ready)
+        result.level = "ok"
+        result.message = f"Ready: {names}"
+        if blocked:
+            result.message += f"  (+{len(blocked)} not ready)"
+    elif blocked:
+        result.level = "warn"
+        first = blocked[0]
+        result.message = (f"{first.platform} device found but state is "
+                          f"'{first.state}'. {hint_for(first)}".strip())
+    else:
+        result.level = "warn"
+        result.message = (
+            "No phone detected. Plug in with a data-capable USB cable, enable "
+            "USB debugging (Android: Settings > Developer options), unlock the "
+            "screen, choose 'File transfer' for USB mode, then press Detect.")
+        if not adb_ok:
+            result.message += "  (adb is not installed, so only iPhones can be found.)"
+    return result
+
+
 def first_ready_device() -> DeviceInfo | None:
-    """Return the first device in the 'device' state (ready for commands)."""
-    for d in connected_devices():
+    """First Android device in the 'device' state (used by the Tools tab)."""
+    for d in adb_devices():
         if d.state == "device":
             return d
     return None
+
 
 # Backwards-compat: older modules imported `Device` directly.
 Device = DeviceInfo

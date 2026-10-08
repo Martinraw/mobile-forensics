@@ -121,6 +121,29 @@ samples/                   sample data (git-ignored)
 5. Check `cases/TEST001/acq_logical/` and the `*.manifest.json` hash manifest.
 6. Record what worked and what failed in `docs/RESEARCH_LOG.md`.
 
+## Forensic Suite (desktop GUI): real extraction
+
+`python forensic_suite/main.py` opens the desktop GUI. Its **Extraction** tab runs the same
+engine as the CLI (`mobileforensics/acquisition.py`); nothing is simulated.
+
+1. Create a case (examiner and authorization reference are mandatory).
+2. Plug in the phone and press **Detect device**; it re-checks every 3 seconds.
+3. Choose methods and press **START EXTRACTION**, then confirm the authorization prompt.
+
+| Device | Methods | Notes |
+|---|---|---|
+| Android | Logical | SMS/MMS, calls, contacts, calendar, packages, shared storage |
+| Android, rooted test device | Full file-system | tar of `/data/data`, `/data/system*`, `/data/misc`, `/data/media/0` |
+| iPhone | Backup | needs `idevicebackup2`; unlock and tap Trust |
+
+Each method writes `cases/<CASE>/acq_<method>/` (never overwriting an earlier run), a SHA-256
+`*.manifest.json`, a post-acquisition verification pass (Settings > verify hashes), and entries in the
+hash-chained `audit.jsonl`. Cancelling keeps and hashes whatever was collected. Edit `SHARED_PATHS`
+and `ROOT_APP_PATHS` at the top of `acquisition.py` to narrow or widen scope.
+
+Not supported: lock bypass, exploits, chip-off, cloud, SIM, and built-in output encryption.
+For locked devices, import an image made by another tool with `import-evidence`.
+
 ## Documentation
 
 - [docs/DESIGN.md](docs/DESIGN.md) architecture, scope and design decisions

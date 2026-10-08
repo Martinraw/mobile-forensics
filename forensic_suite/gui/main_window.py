@@ -7,7 +7,6 @@ from PySide6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QLabel,
                                QLineEdit, QMainWindow, QMessageBox, QPushButton,
                                QSplitter, QStackedWidget, QVBoxLayout, QWidget)
 
-from core.device_manager import connected_devices
 from gui import load_stylesheet
 from gui.right_panel import RightPanel
 from gui.sidebar import Sidebar
@@ -338,9 +337,16 @@ class MainWindow(QMainWindow):
         self.right_panel.setVisible(not self.right_panel.isVisible())
 
     def _populate_devices(self) -> None:
-        devices = connected_devices()
+        # The Extraction tab detects devices in the background and reports
+        # back through devices_changed; nothing blocks startup here.
+        self.sidebar.set_devices("\u25cb  Checking\u2026")
+        self.extraction.devices_changed.connect(self._on_devices_changed)
+
+    def _on_devices_changed(self, devices: list) -> None:
         if devices:
-            text = "\n".join(f"\u25cf {d.model}" for d in devices[:3])
+            text = "\n".join(
+                f"\u25cf {d.model}" + ("" if d.state == "device" else f" ({d.state})")
+                for d in devices[:3])
         else:
             text = "\u25cb  No device"
         self.sidebar.set_devices(text)

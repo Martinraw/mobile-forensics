@@ -69,11 +69,12 @@ class DeviceCard(QFrame):
         self.icon.setText("\U0001F4F1" if device.platform == "iOS" else "\U0001F5A5\uFE0F")
         values = {
             "Platform": device.platform,
-            "OS version": (f"Android {device.os_version}" if device.platform == "Android"
-                           else f"iOS {device.os_version}"),
+            "OS version": (f"{device.platform} {device.os_version}"
+                           if device.os_version else "\u2014"),
             "Serial": device.serial,
             "IMEI": device.imei or "—",
-            "Connection": device.connection,
+            "Connection": (device.connection if device.state == "device"
+                           else f"{device.connection} ({device.state})"),
             "Root access": "Yes" if device.rooted else "No",
         }
         for key, value in values.items():

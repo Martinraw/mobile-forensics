@@ -67,23 +67,29 @@ class AuditLog:
         return True
 
 
-def build_manifest(root: Path, manifest_path: Path) -> dict:
-    '''Hash every file under root and write a manifest (path -> sha256, size).'''
+def build_manifest(root: Path, manifest_path: Path, progress=None) -> dict:
+    '''Hash every file under root and write a manifest (path -> sha256, size).
+    progress(done, total, path) is called before each file; it may raise to abort.'''
     files = {}
-    for p in sorted(Path(root).rglob('*')):
-        if p.is_file():
-            files[str(p.relative_to(root))] = {'sha256': sha256_file(p),
-                                               'size': p.stat().st_size}
+    paths = [p for p in sorted(Path(root).rglob('*')) if p.is_file()]
+    for i, p in enumerate(paths, 1):
+        if progress:
+            progress(i, len(paths), p)
+        files[str(p.relative_to(root))] = {'sha256': sha256_file(p),
+                                           'size': p.stat().st_size}
     manifest = {'created_utc': utc_now(), 'root': str(root), 'files': files}
     Path(manifest_path).write_text(json.dumps(manifest, indent=2))
     return manifest
 
 
-def verify_manifest(root: Path, manifest_path: Path) -> list:
+def verify_manifest(root: Path, manifest_path: Path, progress=None) -> list:
     '''Return a list of problems (an empty list means every file matches).'''
     manifest = json.loads(Path(manifest_path).read_text())
     problems = []
-    for rel, meta in manifest['files'].items():
+    total = len(manifest['files'])
+    for i, (rel, meta) in enumerate(manifest['files'].items(), 1):
+        if progress:
+            progress(i, total, Path(rel))
         p = Path(root) / rel
         if not p.exists():
             problems.append(f'missing: {rel}')
