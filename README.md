@@ -144,6 +144,24 @@ and `ROOT_APP_PATHS` at the top of `acquisition.py` to narrow or widen scope.
 Not supported: lock bypass, exploits, chip-off, cloud, SIM, and built-in output encryption.
 For locked devices, import an image made by another tool with `import-evidence`.
 
+### Forensic Suite: case explorer, files, overview (new)
+
+| Area | What it does |
+|---|---|
+| Home | Launcher: Device Extractor, New case, and Import tiles (file-system archive / folder / image / WhatsApp db) |
+| Case explorer | Cases > extractions > sections with live counts (Messages, Files, Key Evidence, Applications...). Right-click to re-index or remove records (evidence on disk is never deleted) |
+| Extraction | "Select data to extract" checklist (drives the real ADB logical collection), step tracker, pre-extraction checklist. After each run the output is parsed and indexed automatically |
+| Overview | Device header plus Statistics, Extraction info, Owner, General info, Device, Photos and Note tabs, and tiles for each section |
+| Files | Folder tree, category tabs (images, audio, video, databases, documents, plists, JSON, archives, apps, screenshots, camera), filter box, key-evidence stars, tags, notes, duplicates by SHA-256, MD5/SHA-256 per file, preview and metadata, hash sets (known / notable), advanced filters, CSV export and file copy-out |
+| Timeline | Built from real dated artifacts and file modification times (previously random sample events) |
+
+Parsing covers SMS/MMS, calls, contacts, calendar, installed packages and unencrypted
+`msgstore.db` (parsed from a temporary copy). Imported zip/tar archives are extracted with
+zip-slip protection. Not implemented, and shown as unavailable rather than faked: cloud
+acquisition, face/speech/malware analytics, raw image (E01/dd) reading.
+
+Existing databases are migrated automatically on start. Tests: `pytest` (includes offscreen GUI tests).
+
 ## Documentation
 
 - [docs/DESIGN.md](docs/DESIGN.md) architecture, scope and design decisions

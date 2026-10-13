@@ -9,7 +9,7 @@ except ImportError:  # tolerate the dependency being unavailable
     psutil = None
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QLabel, QProgressBar, QStatusBar, QWidget
+from PySide6.QtWidgets import QLabel, QMenu, QProgressBar, QStatusBar, QToolButton, QWidget
 
 _CONN_TEXT = {
     "ok": "\U0001F7E2  Connected",
@@ -38,6 +38,15 @@ class StatusBar(QStatusBar):
 
         self.device_label = QLabel("Device: \u2014")
         self.addWidget(self.device_label)
+
+        self._history: list[str] = []
+        self._unread = 0
+        self.notif_btn = QToolButton()
+        self.notif_btn.setAutoRaise(True)
+        self.notif_btn.setToolTip("Notifications")
+        self.notif_btn.clicked.connect(self._show_notifications)
+        self._update_notif()
+        self.addPermanentWidget(self.notif_btn)
 
         self.task_label = QLabel("Idle")
         self.task_label.setStyleSheet("color:#8B949E;")
@@ -90,3 +99,31 @@ class StatusBar(QStatusBar):
     def set_connection(self, state: str) -> None:
         self.connection.setText(_CONN_TEXT.get(state, state))
         self.connection.setStyleSheet(_CONN_STYLE.get(state, _CONN_STYLE["idle"]))
+
+    # ---- notification centre ----
+    def add_notification(self, text: str) -> None:
+        self._history.append(f"{datetime.now():%H:%M:%S}  {text}")
+        self._history = self._history[-50:]
+        self._unread += 1
+        self._update_notif()
+
+    def _update_notif(self) -> None:
+        self.notif_btn.setText(f"\U0001F514 {self._unread}" if self._unread else "\U0001F514")
+
+    def _show_notifications(self) -> None:
+        menu = QMenu(self)
+        if not self._history:
+            menu.addAction("No notifications").setEnabled(False)
+        for line in reversed(self._history[-15:]):
+            menu.addAction(line[:140]).setEnabled(False)
+        menu.addSeparator()
+        menu.addAction("Clear", self._clear_notifications)
+        self._unread = 0
+        self._update_notif()
+        menu.exec(self.notif_btn.mapToGlobal(self.notif_btn.rect().topLeft()
+                                              - self.notif_btn.rect().bottomLeft()))
+
+    def _clear_notifications(self) -> None:
+        self._history.clear()
+        self._unread = 0
+        self._update_notif()

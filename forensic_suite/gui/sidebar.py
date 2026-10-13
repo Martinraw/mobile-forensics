@@ -6,8 +6,11 @@ from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QFrame, QLabel,
                                QToolButton, QVBoxLayout, QWidget)
 
 NAV_ITEMS = [
+    ("home", "\U0001F3E0", "Home"),
     ("dashboard", "\U0001F4C2", "Dashboard"),
     ("extraction", "\U0001F4F1", "Extraction"),
+    ("overview", "\U0001F4CB", "Overview"),
+    ("files", "\U0001F4C1", "Files"),
     ("data", "\U0001F50D", "Data Viewer"),
     ("timeline", "\U0001F4C8", "Timeline"),
     ("reports", "\U0001F4C4", "Reports"),
@@ -44,7 +47,7 @@ class Sidebar(QFrame):
             btn.setCheckable(True)
             btn.setToolTip(label)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setMinimumHeight(38)
+            btn.setMinimumHeight(34)
             btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
             self._group.addButton(btn)
             self._buttons[key] = btn

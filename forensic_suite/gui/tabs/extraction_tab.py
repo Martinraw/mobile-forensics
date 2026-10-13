@@ -15,7 +15,10 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, 
 from core.acquisition_service import (AcquisitionOutcome, AcquisitionRequest,
                                       plan_methods, run_acquisition)
 from core.device_manager import detect, hint_for
+from gui.dialogs import DataSelectionDialog
+from gui.right_panel import CollapsibleSection
 from widgets.device_card import DeviceCard
+from mobileforensics.acquisition import DATA_ITEMS
 
 class ExtractionWorker(QThread):
     """Runs a REAL acquisition (adb / libimobiledevice) off the UI thread."""
@@ -53,6 +56,18 @@ class DetectWorker(QThread):
                                      message=f"Device detection failed: {exc}"))
 
 
+STEPS = ["Device connection", "Data selection", "Data extraction",
+         "Hashing & verification", "Indexing & parsing"]
+_STEP_ICON = {"pending": "\u25CB", "active": "\u25B6", "done": "\u2705", "error": "\u274C"}
+_STEP_COLOR = {"pending": "#6E7681", "active": "#FFAB00", "done": "#00E676", "error": "#FF1744"}
+TIPS = [
+    "Enable Developer options, then USB debugging, and accept the RSA key prompt on the phone.",
+    "Keep the device unlocked and disable auto-lock for the whole extraction.",
+    "Put the device in airplane mode and make sure it is fully charged.",
+    "Make sure USB tethering (\"USB modem\") is off and the correct USB driver is installed.",
+    "Only continue if you own the device or hold written authorization; the case records it.",
+]
+
 _LEVEL_COLOR = {"ok": "#00E676", "warn": "#FFAB00",
                 "error": "#FF1744", "idle": "#8B949E"}
 POLL_MS = 3000
@@ -73,6 +88,8 @@ class ExtractionTab(QWidget):
         self._started_at = 0.0
         self._last_log_key = ""
         self.elapsed_timer: QTimer | None = None
+        self._selection: set[str] | None = None   # None = every available item
+        self._steps: list[QLabel] = []
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(18, 18, 18, 18)
@@ -128,6 +145,18 @@ class ExtractionTab(QWidget):
             "(see docs/ETHICS_AND_AUTHORIZATION.md).")
         opt_lay.addWidget(self.chk_encrypt)
 
+        sel_row = QHBoxLayout()
+        self.sel_btn = QPushButton("Select data to extract\u2026")
+        self.sel_btn.setObjectName("Ghost")
+        self.sel_btn.setToolTip("Choose which data the logical method collects")
+        self.sel_btn.clicked.connect(self._choose_data)
+        self.sel_label = QLabel("")
+        self.sel_label.setProperty("role", "muted")
+        sel_row.addWidget(self.sel_btn)
+        sel_row.addWidget(self.sel_label, 1)
+        opt_lay.addLayout(sel_row)
+        self._update_selection_label()
+
         path_row = QHBoxLayout()
         self.output_path = QLineEdit(str(Path(self.ctx.config.get(
             "extraction", "default_out",
@@ -154,6 +183,20 @@ class ExtractionTab(QWidget):
         opt_lay.addLayout(btn_row)
 
         left.addWidget(options)
+
+        tips_body = QWidget()
+        tl = QVBoxLayout(tips_body)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.setSpacing(3)
+        for tip in TIPS:
+            lab = QLabel("\u2022 " + tip)
+            lab.setWordWrap(True)
+            lab.setProperty("role", "muted")
+            tl.addWidget(lab)
+        tips = CollapsibleSection("Before you start", tips_body)
+        tips.toggle.setChecked(False)
+        tips._toggle(False)
+        left.addWidget(tips)
         left.addStretch()
         layout.addLayout(left, 2)
 
@@ -165,6 +208,11 @@ class ExtractionTab(QWidget):
         prog_lay = QVBoxLayout(progress_card)
         prog_lay.setContentsMargins(12, 12, 12, 12)
         prog_lay.addWidget(QLabel("Live progress"))
+        for name in STEPS:
+            lab = QLabel()
+            self._steps.append(lab)
+            prog_lay.addWidget(lab)
+        self._reset_steps()
         self.stage_label = QLabel("Idle")
         self.stage_label.setObjectName("CardTitle")
         prog_lay.addWidget(self.stage_label)
@@ -296,6 +344,37 @@ class ExtractionTab(QWidget):
         if path:
             self.output_path.setText(path)
 
+    # ---- data selection / steps ----
+    def _choose_data(self) -> None:
+        device = self.device_card.device
+        dlg = DataSelectionDialog(self._selection, bool(device and device.rooted), self)
+        if dlg.exec():
+            chosen = dlg.selection()
+            self._selection = None if len(chosen) == len(DATA_ITEMS) else chosen
+            self._update_selection_label()
+
+    def _update_selection_label(self) -> None:
+        n = len(DATA_ITEMS) if self._selection is None else len(self._selection)
+        self.sel_label.setText(f"{n} of {len(DATA_ITEMS)} items selected")
+
+    def _set_step(self, index: int, state: str) -> None:
+        lab = self._steps[index]
+        lab.setText(f"{_STEP_ICON[state]}  {STEPS[index]}")
+        lab.setStyleSheet(f"color:{_STEP_COLOR[state]};")
+
+    def _reset_steps(self) -> None:
+        for i in range(len(STEPS)):
+            self._set_step(i, "pending")
+
+    def index_progress(self, message: str, percent: int) -> None:
+        self._set_step(4, "active")
+        self.stage_label.setText(message[:110])
+        self.progress.setValue(max(0, min(percent, 100)))
+
+    def index_done(self, ok: bool) -> None:
+        self._set_step(4, "done" if ok else "error")
+        self.stage_label.setText("Idle")
+
     def _selected_options(self) -> str:
         chosen = [name for cb, name in (
             (self.chk_full, "Full FS"), (self.chk_logical, "Logical"),
@@ -345,10 +424,15 @@ class ExtractionTab(QWidget):
             cases_root=Path(self.output_path.text()).expanduser(),
             case_id=case.case_id, examiner=case.examiner,
             authorization=case.authorization_ref, device=device, methods=methods,
-            verify=bool(self.ctx.config.get("extraction", "verify_hashes", True)))
+            verify=bool(self.ctx.config.get("extraction", "verify_hashes", True)),
+            selection=self._selection)
 
         self.start_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
+        self._reset_steps()
+        for i in (0, 1):
+            self._set_step(i, "done")
+        self._set_step(2, "active")
         self.progress.setValue(0)
         self.stage_label.setText("Starting\u2026")
         self.eta_label.setText(f"Case: {case.case_id}")
@@ -385,6 +469,9 @@ class ExtractionTab(QWidget):
 
     # ---- progress wiring ----
     def _on_progress(self, message: str, percent: int) -> None:
+        if message.startswith(("Hashing", "Verifying")):
+            self._set_step(2, "done")
+            self._set_step(3, "active")
         self.stage_label.setText(message[:110])
         if percent >= 0:
             self.progress.setValue(min(percent, 100))
@@ -410,6 +497,8 @@ class ExtractionTab(QWidget):
         self.cancel_btn.setEnabled(False)
         self.progress.setValue(100 if outcome.ok else self.progress.value())
         self.stage_label.setText("Idle" if outcome.ok else "Stopped")
+        self._set_step(2, "done" if outcome.ok else "error")
+        self._set_step(3, "done" if outcome.ok else "error")
         color = "#00E676" if outcome.ok else ("#FFAB00" if outcome.cancelled else "#FF1744")
         self.ctx.status("Idle", "ok" if outcome.ok else "error",
                         100 if outcome.ok else 0)
@@ -429,10 +518,22 @@ class ExtractionTab(QWidget):
                 self._on_log(f"  manifest sha256 {res.manifest_sha256}", "#8B949E")
             if case is not None:
                 try:
-                    self.ctx.case_manager.record_extraction(
+                    info = {"platform": device.platform if device else "",
+                            "serial": device.serial if device else "",
+                            "model": device.model if device else "",
+                            "os_version": device.os_version if device else "",
+                            "imei": device.imei if device else "",
+                            "rooted": bool(device and device.rooted),
+                            "manifest_sha256": res.manifest_sha256,
+                            "verified": res.verified,
+                            "data_selection": sorted(self._selection)
+                            if self._selection is not None and res.method == "logical" else "all"}
+                    ext_id = self.ctx.case_manager.record_extraction(
                         case.case_id, device.model if device else "device",
                         res.method, res.status, files=res.files,
-                        size_bytes=res.size_bytes)
+                        size_bytes=res.size_bytes, out_dir=res.out_dir, info=info)
+                    if res.out_dir and res.status in ("complete", "partial", "cancelled"):
+                        self.ctx.process_extraction(case.case_id, ext_id, res.out_dir)
                 except Exception as exc:
                     self._on_log(f"Could not record extraction: {exc}", "#FF1744")
         if case is not None:

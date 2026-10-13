@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-from sqlalchemy import (DateTime, Float, ForeignKey, Integer, String, Text,
-                        create_engine)
+from sqlalchemy import (BigInteger, Boolean, DateTime, Float, ForeignKey, Integer,
+                        String, Text, create_engine, inspect, text)
 from sqlalchemy.orm import (DeclarativeBase, Mapped, Session, mapped_column,
                             relationship, sessionmaker)
 
@@ -56,6 +56,7 @@ class Artifact(Base):
     recipient: Mapped[str | None] = mapped_column(String(255), nullable=True)
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    extraction_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
 
     case: Mapped["Case"] = relationship(back_populates="artifacts")
 
@@ -71,7 +72,10 @@ class Extraction(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     files: Mapped[int] = mapped_column(Integer, default=0)
-    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    out_dir: Mapped[str] = mapped_column(Text, default="")
+    info_json: Mapped[str] = mapped_column(Text, default="{}")
+    note: Mapped[str] = mapped_column(Text, default="")
 
     case: Mapped["Case"] = relationship(back_populates="extractions")
 
@@ -119,6 +123,63 @@ class ToolRun(Base):
     case: Mapped["Case"] = relationship(back_populates="tool_runs")
 
 
+class EvidenceFile(Base):
+    """One file found inside an extraction (the Files section)."""
+
+    __tablename__ = "evidence_files"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("cases.id"), index=True)
+    extraction_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    name: Mapped[str] = mapped_column(String(512), index=True)
+    folder: Mapped[str] = mapped_column(Text, default="", index=True)   # parent, relative
+    rel_path: Mapped[str] = mapped_column(Text, default="")
+    device_path: Mapped[str] = mapped_column(Text, default="")
+    abs_path: Mapped[str] = mapped_column(Text, default="")
+    ext: Mapped[str] = mapped_column(String(32), default="", index=True)
+    category: Mapped[str] = mapped_column(String(32), default="other", index=True)
+    mime: Mapped[str] = mapped_column(String(128), default="")
+    size: Mapped[int] = mapped_column(BigInteger, default=0)
+    sha256: Mapped[str] = mapped_column(String(64), default="", index=True)
+    md5: Mapped[str] = mapped_column(String(32), default="", index=True)
+    created: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    modified: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    accessed: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    key_evidence: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    tags: Mapped[str] = mapped_column(String(512), default="")          # comma separated
+    note: Mapped[str] = mapped_column(Text, default="")
+    hashset_match: Mapped[str] = mapped_column(String(255), default="")
+
+
+class HashSet(Base):
+    """A list of known (ignore) or notable (alert) file hashes."""
+
+    __tablename__ = "hash_sets"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), unique=True)
+    kind: Mapped[str] = mapped_column(String(16), default="notable")   # known | notable
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    entries: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class HashSetEntry(Base):
+    __tablename__ = "hash_set_entries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    set_id: Mapped[int] = mapped_column(ForeignKey("hash_sets.id"), index=True)
+    digest: Mapped[str] = mapped_column(String(64), index=True)         # md5 or sha256, lower case
+
+
+# Columns added after the first release: (table, column, SQL type + default).
+_MIGRATIONS = [
+    ("artifacts", "extraction_id", "INTEGER"),
+    ("extractions", "out_dir", "TEXT DEFAULT ''"),
+    ("extractions", "info_json", "TEXT DEFAULT '{}'"),
+    ("extractions", "note", "TEXT DEFAULT ''"),
+]
+
+
 class Database:
     def __init__(self, path: str | Path | None = None) -> None:
         if path is None:
@@ -135,6 +196,19 @@ class Database:
         if str(parent) not in (".", ""):
             Path(parent).mkdir(parents=True, exist_ok=True)
         Base.metadata.create_all(self.engine)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after the first release to an existing database."""
+        inspector = inspect(self.engine)
+        existing = set(inspector.get_table_names())
+        with self.engine.begin() as conn:
+            for table, column, ddl in _MIGRATIONS:
+                if table not in existing:
+                    continue
+                have = {c["name"] for c in inspector.get_columns(table)}
+                if column not in have:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
 
     @contextmanager
     def session(self) -> Iterator[Session]:

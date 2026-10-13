@@ -218,6 +218,40 @@ ROOT_APP_PATHS = ['/data/data', '/data/system', '/data/system_ce', '/data/system
 # su syntaxes differ between root solutions; the first that yields data wins.
 SU_WRAPPERS = ("su -c '{c}'", "su 0 sh -c '{c}'")
 
+# Items an examiner can tick in the "select the data to be extracted" dialog.
+# key -> (label, supported by the logical method). Unsupported items are shown
+# disabled in the GUI with the reason below, never silently ignored.
+DATA_ITEMS = [
+    ('device_info', 'Device information', True),
+    ('applications', 'Applications (installed packages)', True),
+    ('accounts', 'Accounts info', True),
+    ('bluetooth', 'Bluetooth paired devices', True),
+    ('contacts', 'Contacts', True),
+    ('calls', 'Calls', True),
+    ('calendars', 'Calendars', True),
+    ('sms', 'SMS', True),
+    ('mms', 'MMS / RCS', True),
+    ('images', 'Image files', True),
+    ('video', 'Video files', True),
+    ('audio', 'Audio files', True),
+    ('documents', 'Document files', True),
+    ('app_files', 'Application files', True),
+]
+LOGICAL_ONLY_ROOT = ['Wi-Fi access points', 'Browsers', 'Dictionaries', 'Installed APKs',
+                     'Database files']
+ROOT_REASON = ('Needs a rooted, authorized test device (file-system method). '
+               'Android does not expose this to a normal ADB session.')
+# selection key -> LOGICAL_QUERIES key / SHARED_PATHS entries
+QUERY_KEYS = {'sms': 'sms', 'mms': 'mms', 'calls': 'call_log', 'contacts': 'contacts',
+              'calendars': 'calendar'}
+PATH_KEYS = {'images': ['/sdcard/DCIM', '/sdcard/Pictures'],
+             'video': ['/sdcard/Movies'],
+             'audio': ['/sdcard/Music'],
+             'documents': ['/sdcard/Documents', '/sdcard/Download'],
+             'app_files': ['/sdcard/Android/media', '/sdcard/WhatsApp']}
+DUMPSYS_KEYS = {'accounts': ('accounts.txt', 'account'),
+                'bluetooth': ('bluetooth.txt', 'bluetooth_manager')}
+
 _ADB_PERCENT = re.compile(r'\[\s*(\d+)%\]')
 
 
@@ -228,36 +262,56 @@ class AndroidAcquirer:
     def _adb(self, *args, timeout: int = 600) -> str:
         return _run(['adb', '-s', self.info.serial, *args], timeout)
 
-    def logical(self, out: Path, ctl: Control = NO_CONTROL) -> list:
+    def logical(self, out: Path, ctl: Control = NO_CONTROL, selection=None) -> list:
         '''Logical acquisition: what the OS exposes to an authorized ADB session.
-        Returns a list of non-fatal errors (also written to acquisition_errors.txt).'''
+        selection is an optional set of DATA_ITEMS keys; None collects everything
+        in the original scope. Returns a list of non-fatal errors (also written to
+        acquisition_errors.txt).'''
         out = Path(out)
         (out / 'files').mkdir(parents=True, exist_ok=True)
         errors = []
-        total = 2 + len(LOGICAL_QUERIES) + len(SHARED_PATHS)
-        done = 0
+        sel = set(selection) if selection else None
 
-        def begin(label):
+        def want(key):
+            return sel is None or key in sel
+
+        # (label, callable) steps; each step may append to errors but never aborts.
+        steps = []
+        if want('device_info'):
+            steps.append(('Reading device properties', lambda: (out / 'getprop.txt').write_text(
+                self._adb('shell', 'getprop'), encoding='utf-8')))
+        if want('applications'):
+            steps.append(('Listing installed packages', lambda: (out / 'packages.txt').write_text(
+                self._adb('shell', 'pm', 'list', 'packages', '-f'), encoding='utf-8')))
+        for item, qkey in QUERY_KEYS.items():
+            if want(item) and qkey in LOGICAL_QUERIES:
+                steps.append((f'Querying {qkey}', lambda q=qkey: (out / f'{q}.txt').write_text(
+                    self._adb('shell', *LOGICAL_QUERIES[q].split()), encoding='utf-8')))
+        if sel is not None:  # extra dumps only when explicitly requested
+            for item, (fname, service) in DUMPSYS_KEYS.items():
+                if item in sel:
+                    steps.append((f'Reading {item}', lambda f=fname, sv=service: (out / f).write_text(
+                        self._adb('shell', 'dumpsys', sv), encoding='utf-8')))
+        if sel is None:
+            paths = list(SHARED_PATHS)
+        else:
+            paths = [p for key, plist in PATH_KEYS.items() if key in sel
+                     for p in plist if p in SHARED_PATHS]
+        total = max(len(steps) + len(paths), 1)
+        done = 0
+        for label, fn in steps:
             ctl.check()
             ctl.report(label, int(100 * done / total))
-
-        begin('Reading device properties')
-        (out / 'getprop.txt').write_text(self._adb('shell', 'getprop'), encoding='utf-8')
-        done += 1
-        begin('Listing installed packages')
-        (out / 'packages.txt').write_text(
-            self._adb('shell', 'pm', 'list', 'packages', '-f'), encoding='utf-8')
-        done += 1
-        for name, query in LOGICAL_QUERIES.items():
-            begin(f'Querying {name}')
             try:
-                (out / f'{name}.txt').write_text(
-                    self._adb('shell', *query.split()), encoding='utf-8')
+                fn()
             except AcquisitionError as e:
-                errors.append(f'{name}: {e}')
+                errors.append(f'{label}: {e}')
+            except OSError as e:
+                errors.append(f'{label}: {e}')
             done += 1
-        for path in SHARED_PATHS:
-            begin(f'Pulling {path}')
+        for path in paths:
+            ctl.check()
+            ctl.report(f'Pulling {path}', int(100 * done / total))
 
             def on_line(line, path=path, base=done):
                 m = _ADB_PERCENT.search(line)
@@ -339,6 +393,10 @@ def import_evidence(src: Path, case_dir: Path, audit: AuditLog) -> Path:
     The original is never modified; hashes are checked after copying.'''
     src, case_dir = Path(src), Path(case_dir)
     dest = case_dir / 'imported' / src.name
+    n = 1
+    while dest.exists():  # never overwrite an earlier import
+        n += 1
+        dest = case_dir / 'imported' / f'{src.stem}_{n}{src.suffix}'
     dest.parent.mkdir(parents=True, exist_ok=True)
     if src.is_dir():
         shutil.copytree(src, dest)
@@ -417,11 +475,12 @@ class AcquisitionManager:
         return entry
 
     def acquire(self, info: DeviceInfo, requested=None, ctl: Control = NO_CONTROL,
-                verify: bool = True) -> list:
+                verify: bool = True, selection=None) -> list:
         self.report = []
         self.audit.log('device_detected', **info.__dict__)
         runners = {
-            ('android', Method.LOGICAL): AndroidAcquirer(info).logical,
+            ('android', Method.LOGICAL): lambda o, c: AndroidAcquirer(info).logical(
+                o, c, selection=selection),
             ('android', Method.FILESYSTEM): AndroidAcquirer(info).filesystem_root,
             ('ios', Method.BACKUP): IosAcquirer(info).backup,
         }

@@ -1,8 +1,7 @@
 """Timeline: zoomable event visualization with filters and click details."""
 from __future__ import annotations
 
-import random
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from matplotlib import dates as mdates
 
@@ -12,18 +11,9 @@ from PySide6.QtWidgets import (QComboBox, QDateEdit, QHBoxLayout, QLabel,
 
 from widgets.chart_widget import ChartWidget
 
-CATEGORIES = ["messages", "calls", "media", "locations"]
+CATEGORIES = ["messages", "calls", "calendar", "media", "documents"]
 PALETTE = {"messages": "#00E5FF", "calls": "#7C4DFF", "media": "#00E676",
-           "locations": "#FFAB00", "contacts": "#3AA6FF", "cloud": "#F48FB1",
-           "deleted": "#FF1744", "apps": "#8B949E"}
-
-_TEMPLATES = [
-    "Contact circled the suspect location twice the same evening",
-    "Messaging traffic spikes just before the incident window",
-    "Deleted SMS recovered from the WAL journal",
-    "Media file shared minutes after the outgoing call",
-    "Location ping 800 m from the crime scene",
-]
+           "calendar": "#FFAB00", "documents": "#3AA6FF"}
 
 
 class TimelineTab(QWidget):
@@ -32,7 +22,8 @@ class TimelineTab(QWidget):
     def __init__(self, ctx, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.ctx = ctx
-        self.events = self._generate_events()
+        self.events: list[dict] = []
+        self._case_id: str | None = None
         self._filtered_events: list = []
 
         layout = QVBoxLayout(self)
@@ -99,21 +90,17 @@ class TimelineTab(QWidget):
         self.detail.setWordWrap(True)
         layout.addWidget(self.detail)
 
-    def _generate_events(self) -> list[dict]:
-        now = datetime.now()
-        events = []
-        for _ in range(140):
-            days_back = random.randint(0, 30)
-            minutes = random.randint(0, 1439)
-            ts = now - timedelta(days=days_back, minutes=minutes)
-            category = random.choice(CATEGORIES)
-            template = random.choice(_TEMPLATES)
-            events.append({
-                "ts": ts, "category": category,
-                "detail": f"{category.capitalize()} event on {ts:%Y-%m-%d %H:%M} "
-                          f"\u2014 {template}",
-            })
-        return events
+    def set_case(self, case_id: str | None) -> None:
+        """Load real dated events (artifacts + file modification times) for the case."""
+        self._case_id = case_id
+        self.events = self.ctx.case_manager.timeline_events(case_id) if case_id else []
+        if self.events:
+            self.start_date.setDate(QDate(self.events[0]["ts"].year, self.events[0]["ts"].month,
+                                          self.events[0]["ts"].day))
+            last = self.events[-1]["ts"]
+            self.end_date.setDate(QDate(last.year, last.month, last.day))
+        self._apply()
+
     def _apply(self) -> None:
         start = self.start_date.date().toPython()
         end = self.end_date.date().toPython()
@@ -137,7 +124,7 @@ class TimelineTab(QWidget):
         self.chart.set_scatter_timeline(xs, ys, colors, annotations)
         self._filtered_events = annotations
         self.count_label.setText(f"{len(annotations)} events")
-        self.ctx.log(f"Timeline filtered: {len(annotations)} events", "#00E5FF")
+        self.ctx.log(f"Timeline: {len(annotations)} events", "#00E5FF")
 
     def _on_pick(self, index: int) -> None:
         if index >= len(self._filtered_events):

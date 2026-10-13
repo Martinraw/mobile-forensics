@@ -17,6 +17,8 @@ from widgets.data_table import DataTable
 CATEGORIES = [
     ("Call Logs",    "calls",     "\U0001F4DE"),
     ("Messages",     "sms",       "\U0001F4AC"),
+    ("WhatsApp",     "whatsapp",  "\U0001F7E2"),
+    ("Calendar",     "calendar",  "\U0001F4C5"),
     ("Contacts",     "contacts",  "\U0001F465"),
     ("Media",        "media",     "\U0001F4F7"),
     ("Locations",    "locations", "\U0001F4CD"),
@@ -29,6 +31,8 @@ CATEGORIES = [
 # unknown categories fall back to Timestamp/Source/Content.
 _HEADERS = {
     "calls":     ["Timestamp", "Number", "Sender", "Recipient", "Source"],
+    "whatsapp":  ["Timestamp", "Sender", "Recipient", "Content", "Source"],
+    "calendar":  ["Timestamp", "Content", "Source"],
     "sms":       ["Timestamp", "Sender", "Recipient", "Content", "Source"],
     "contacts":  ["Timestamp", "Sender", "Recipient", "Content", "Source"],
     "media":     ["Timestamp", "Sender", "Recipient", "Content", "Source"],
@@ -153,12 +157,12 @@ class DataViewerTab(QWidget):
                 src = a.source or ""
                 if category == "calls":
                     out.append([ts, a.sender or "", a.sender or "", a.recipient or "", src])
-                elif category in ("sms", "messages"):
+                elif category in ("sms", "messages", "whatsapp"):
                     out.append([ts, a.sender or "", a.recipient or "",
                                 a.content or "", src])
                 elif category == "locations":
                     out.append([ts, a.content or "", a.content or "", src])
-                elif category in ("apps", "cloud", "deleted"):
+                elif category in ("apps", "cloud", "deleted", "calendar"):
                     out.append([ts, a.content or "", src])
                 else:
                     out.append([ts, a.sender or "", a.recipient or "",
@@ -182,6 +186,12 @@ class DataViewerTab(QWidget):
         self.ctx.log("Data viewer refreshed", "#8B949E")
 
     # ---------- external API ----------
+    def show_category(self, key: str) -> None:
+        item = self._items.get(key)
+        if item is not None:
+            self.tree.setCurrentItem(item)
+            self._category_clicked(item)
+
     def set_selection_callback(self, callback) -> None:
         self._on_select = callback
 

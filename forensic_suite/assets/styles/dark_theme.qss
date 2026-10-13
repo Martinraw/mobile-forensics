@@ -659,3 +659,21 @@ QMainWindow QWidget#CentralWidget,
 QMainWindow QStackedWidget {
     background-color: #0D1117;
 }
+
+
+/* ---- Oxygen-style additions: tiles, explorer, category tabs ---- */
+QFrame#Tile {
+    background-color: #161B22;
+    border: 1px solid #30363D;
+    border-radius: 8px;
+}
+QFrame#Tile:hover { border-color: #00E5FF; background-color: #1C2430; }
+QFrame#Tile:disabled { background-color: #12161C; border-color: #21262D; }
+QFrame#Tile:disabled QLabel { color: #6E7681; }
+
+QFrame#Explorer { background-color: #0D1117; border-right: 1px solid #30363D; }
+QFrame#ExplorerHead { background-color: #0E639C; }
+QFrame#ExplorerHead QToolButton { color: #FFFFFF; background: transparent; border: none; }
+
+QTabBar#CategoryTabs::tab { padding: 6px 12px; }
+QPushButton:flat { background: transparent; border: none; }

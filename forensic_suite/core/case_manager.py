@@ -86,26 +86,155 @@ class CaseManager:
                      "action": e.action, "details": e.details,
                      "case": case_ids.get(e.case_id, "?")} for e in rows]
 
-    def list_extractions(self) -> list[dict]:
+    def list_extractions(self, case_id: str | None = None) -> list[dict]:
         with self.db.session() as s:
-            rows = s.execute(select(Extraction).order_by(Extraction.id.desc())).scalars().all()
-            return [{"id": e.id, "device": e.device, "method": e.method,
-                     "status": e.status,
-                     "started": e.started_at.strftime("%Y-%m-%d %H:%M:%S") if e.started_at else "-",
-                     "finished": e.finished_at.strftime("%Y-%m-%d %H:%M:%S") if e.finished_at else "-",
-                     "files": e.files, "size_bytes": e.size_bytes} for e in rows]
+            stmt = select(Extraction).order_by(Extraction.id.desc())
+            if case_id:
+                case = s.scalar(select(Case).where(Case.case_id == case_id))
+                if case is None:
+                    return []
+                stmt = stmt.where(Extraction.case_id == case.id)
+            case_ids = {c.id: c.case_id for c in s.scalars(select(Case)).all()}
+            return [self._extraction_dict(e, case_ids) for e in s.execute(stmt).scalars()]
+
+    @staticmethod
+    def _extraction_dict(e: Extraction, case_ids: dict) -> dict:
+        fmt = "%Y-%m-%d %H:%M:%S"
+        try:
+            info = json.loads(e.info_json or "{}")
+        except ValueError:
+            info = {}
+        return {"id": e.id, "case": case_ids.get(e.case_id, "?"), "device": e.device,
+                "method": e.method, "status": e.status,
+                "started": e.started_at.strftime(fmt) if e.started_at else "-",
+                "finished": e.finished_at.strftime(fmt) if e.finished_at else "-",
+                "files": e.files, "size_bytes": e.size_bytes, "out_dir": e.out_dir or "",
+                "info": info, "note": e.note or ""}
+
+    def get_extraction(self, extraction_id: int) -> dict | None:
+        with self.db.session() as s:
+            e = s.get(Extraction, extraction_id)
+            if e is None:
+                return None
+            case_ids = {c.id: c.case_id for c in s.scalars(select(Case)).all()}
+            return self._extraction_dict(e, case_ids)
 
     def record_extraction(self, case_id: str, device: str, method: str,
-                          status: str, files: int = 0, size_bytes: int = 0) -> None:
+                          status: str, files: int = 0, size_bytes: int = 0,
+                          out_dir: str = "", info: dict | None = None) -> int:
         with self.db.session() as s:
             case = s.scalar(select(Case).where(Case.case_id == case_id))
             if case is None:
                 raise ValueError(f"Unknown case '{case_id}'.")
             now = _utcnow()
-            s.add(Extraction(case_id=case.id, device=device, method=method,
+            row = Extraction(case_id=case.id, device=device, method=method,
                              status=status, started_at=now,
                              finished_at=None if status == "running" else now,
-                             files=files, size_bytes=size_bytes))
+                             files=files, size_bytes=size_bytes, out_dir=out_dir,
+                             info_json=json.dumps(info or {}, ensure_ascii=False))
+            s.add(row)
+            s.flush()
+            return row.id
+
+    def update_extraction_info(self, extraction_id: int, **fields) -> None:
+        """Merge keys into the extraction's info (owner, incident number, ...)."""
+        with self.db.session() as s:
+            e = s.get(Extraction, extraction_id)
+            if e is None:
+                return
+            try:
+                info = json.loads(e.info_json or "{}")
+            except ValueError:
+                info = {}
+            info.update(fields)
+            e.info_json = json.dumps(info, ensure_ascii=False)
+
+    def set_extraction_note(self, extraction_id: int, note: str) -> None:
+        with self.db.session() as s:
+            e = s.get(Extraction, extraction_id)
+            if e is not None:
+                e.note = note
+
+    def delete_extraction_records(self, extraction_id: int) -> None:
+        """Remove the database records only. Evidence on disk is never deleted."""
+        from .database import EvidenceFile
+        with self.db.session() as s:
+            s.query(EvidenceFile).filter(EvidenceFile.extraction_id == extraction_id).delete()
+            s.query(Artifact).filter(Artifact.extraction_id == extraction_id).delete()
+            e = s.get(Extraction, extraction_id)
+            if e is not None:
+                s.delete(e)
+
+    # ---- artifacts tied to an extraction ----
+    _LOGICAL_CATEGORIES = ("sms", "calls", "contacts", "calendar", "apps")
+
+    def replace_artifacts(self, case_id: str, extraction_id: int, rows: list[dict],
+                          category: str | None = None) -> int:
+        """Replace this extraction's parsed artifacts (so re-parsing never duplicates)."""
+        with self.db.session() as s:
+            case = s.scalar(select(Case).where(Case.case_id == case_id))
+            if case is None:
+                raise ValueError(f"Unknown case '{case_id}'.")
+            cats = {category} if category else set(self._LOGICAL_CATEGORIES)
+            cats |= {r["category"] for r in rows}
+            s.query(Artifact).filter(Artifact.extraction_id == extraction_id,
+                                     Artifact.category.in_(cats)).delete(
+                synchronize_session=False)
+            s.bulk_insert_mappings(Artifact, [
+                {"case_id": case.id, "extraction_id": extraction_id,
+                 "category": r["category"], "timestamp": r.get("timestamp"),
+                 "sender": r.get("sender") or None, "recipient": r.get("recipient") or None,
+                 "content": r.get("content"), "source": (r.get("source") or "")[:255] or None}
+                for r in rows])
+        return len(rows)
+
+    def artifact_counts(self, case_id: str, extraction_id: int | None = None) -> dict[str, int]:
+        with self.db.session() as s:
+            case = s.scalar(select(Case).where(Case.case_id == case_id))
+            if case is None:
+                return {}
+            stmt = select(Artifact.category, func.count(Artifact.id)).where(
+                Artifact.case_id == case.id)
+            if extraction_id is not None:
+                stmt = stmt.where(Artifact.extraction_id == extraction_id)
+            return dict(s.execute(stmt.group_by(Artifact.category)).all())
+
+    def timeline_events(self, case_id: str, extraction_id: int | None = None,
+                        limit: int = 20000) -> list[dict]:
+        """Real dated events: dated artifacts plus file modification times."""
+        from .database import EvidenceFile
+        events: list[dict] = []
+        with self.db.session() as s:
+            case = s.scalar(select(Case).where(Case.case_id == case_id))
+            if case is None:
+                return []
+            stmt = select(Artifact).where(Artifact.case_id == case.id,
+                                          Artifact.timestamp.is_not(None))
+            if extraction_id is not None:
+                stmt = stmt.where(Artifact.extraction_id == extraction_id)
+            for a in s.execute(stmt.limit(limit)).scalars():
+                label = {"sms": "messages", "whatsapp": "messages"}.get(a.category, a.category)
+                who = a.sender or a.recipient or ""
+                events.append({"ts": a.timestamp, "category": label,
+                               "detail": f"{a.category.upper()} {who}: {(a.content or '')[:160]}"})
+            fstmt = select(EvidenceFile).where(
+                EvidenceFile.case_id == case.id, EvidenceFile.modified.is_not(None),
+                EvidenceFile.category.in_(("images", "videos", "audios", "documents")))
+            if extraction_id is not None:
+                fstmt = fstmt.where(EvidenceFile.extraction_id == extraction_id)
+            for f in s.execute(fstmt.limit(limit)).scalars():
+                events.append({"ts": f.modified, "category": "media" if f.category in
+                               ("images", "videos", "audios") else "documents",
+                               "detail": f"FILE modified: {f.device_path}"})
+        events.sort(key=lambda e: e["ts"])
+        return events[-limit:]
+
+    def case_tree(self) -> list[dict]:
+        """Cases with their extractions, for the explorer."""
+        cases = []
+        for c in self.list_cases():
+            cases.append({**c, "extractions": self.list_extractions(c["case_id"])})
+        return cases
 
     def add_tool_run(self, case_id: str, tool: str, target: str,
                      status: str, command: str = "", duration_s: float = 0.0,
@@ -161,7 +290,7 @@ class CaseManager:
             "data_gb": round(data_bytes / (1024 ** 3), 1),
             "active_tasks": active,
             "categories": categories,
-            "platforms": platforms if platforms else {"Android": 2, "iOS": 1},
+            "platforms": platforms,
             "activity": activity,
         }
 
